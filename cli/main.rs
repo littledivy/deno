@@ -463,7 +463,15 @@ async fn pkg_command(
   debug!("{}", stats);
 
   debug!(">>>>> pkg END");
+  let out = r#"
+  use deno_cli::eval_command;
 
+  fn main() {
+    let code = r#"{}"\#;
+    // todo?
+    eval_command(code);
+  }
+  "#;
   if let Some(out_file_) = out_file.as_ref() {
     let output_bytes = output.as_bytes();
     let output_len = output_bytes.len();
