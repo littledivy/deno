@@ -394,6 +394,92 @@ async fn bundle_command(
   Ok(())
 }
 
+async fn pkg_command(
+  flags: Flags,
+  source_file: String,
+  out_file: Option<PathBuf>,
+) -> Result<(), AnyError> {
+  let module_specifier = ModuleSpecifier::resolve_url_or_path(&source_file)?;
+
+  debug!(">>>>> pkg START");
+  let program_state = ProgramState::new(flags.clone())?;
+
+  info!(
+    "{} {}",
+    colors::green("Package"),
+    module_specifier.to_string()
+  );
+
+  let handler = Rc::new(RefCell::new(FetchHandler::new(
+    &program_state,
+    // when bundling, dynamic imports are only access for their type safety,
+    // therefore we will allow the graph to access any module.
+    Permissions::allow_all(),
+  )?));
+  let mut builder = module_graph::GraphBuilder::new(
+    handler,
+    program_state.maybe_import_map.clone(),
+    program_state.lockfile.clone(),
+  );
+  builder.add(&module_specifier, false).await?;
+  let graph = builder.get_graph();
+
+  let debug = flags.log_level == Some(log::Level::Debug);
+  if !flags.no_check {
+    // TODO(@kitsonk) support bundling for workers
+    let lib = if flags.unstable {
+      module_graph::TypeLib::UnstableDenoWindow
+    } else {
+      module_graph::TypeLib::DenoWindow
+    };
+    let graph = graph.clone();
+    let result_info = graph.check(module_graph::CheckOptions {
+      debug,
+      emit: false,
+      lib,
+      maybe_config_path: flags.config_path.clone(),
+      reload: flags.reload,
+    })?;
+
+    debug!("{}", result_info.stats);
+    if let Some(ignored_options) = result_info.maybe_ignored_options {
+      eprintln!("{}", ignored_options);
+    }
+    if !result_info.diagnostics.is_empty() {
+      return Err(generic_error(result_info.diagnostics.to_string()));
+    }
+  }
+
+  let (output, stats, maybe_ignored_options) =
+    graph.bundle(module_graph::BundleOptions {
+      debug,
+      maybe_config_path: flags.config_path,
+    })?;
+
+  if flags.no_check && maybe_ignored_options.is_some() {
+    let ignored_options = maybe_ignored_options.unwrap();
+    eprintln!("{}", ignored_options);
+  }
+  debug!("{}", stats);
+
+  debug!(">>>>> pkg END");
+
+  if let Some(out_file_) = out_file.as_ref() {
+    let output_bytes = output.as_bytes();
+    let output_len = output_bytes.len();
+    deno_fs::write_file(out_file_, output_bytes, 0o644)?;
+    info!(
+      "{} {:?} ({})",
+      colors::green("Package"),
+      out_file_,
+      colors::gray(&info::human_size(output_len as f64))
+    );
+  } else {
+    println!("{}", output);
+  }
+  Ok(())
+}
+
 struct DocLoader {
   fetcher: FileFetcher,
   maybe_import_map: Option<ImportMap>,
@@ -849,6 +935,12 @@ pub fn main() {
       ca_file,
     } => {
       upgrade_command(dry_run, force, version, output, ca_file).boxed_local()
+    }
+    DenoSubcommand::Package {
+      source_file,
+      out_file,
+    } => {
+      pkg_command(flags, source_file, out_file).boxed_local()
     }
   };
 

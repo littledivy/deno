@@ -30,6 +30,10 @@ pub enum DenoSubcommand {
     source_file: Option<String>,
     filter: Option<String>,
   },
+  Package {
+    source_file: String,
+    out_file: Option<PathBuf>,
+  },
   Eval {
     print: bool,
     code: String,
@@ -289,6 +293,8 @@ pub fn flags_from_vec_safe(args: Vec<String>) -> clap::Result<Flags> {
     doc_parse(&mut flags, m);
   } else if let Some(m) = matches.subcommand_matches("lint") {
     lint_parse(&mut flags, m);
+  } else if let Some(m) = matches.subcommand_matches("pkg") {
+    pkg_parse(&mut flags, m);
   } else {
     repl_parse(&mut flags, &matches);
   }
@@ -350,6 +356,7 @@ If the flag is set, restrict these messages to errors.",
     .subcommand(test_subcommand())
     .subcommand(types_subcommand())
     .subcommand(upgrade_subcommand())
+    .subcommand(pkg_subcommand())
     .long_about(DENO_HELP)
     .after_help(ENV_VARIABLES_HELP)
 }
@@ -417,6 +424,24 @@ fn bundle_parse(flags: &mut Flags, matches: &clap::ArgMatches) {
   };
 
   flags.subcommand = DenoSubcommand::Bundle {
+    source_file,
+    out_file,
+  };
+}
+
+fn pkg_parse(flags: &mut Flags, matches: &clap::ArgMatches) {
+  compile_args_parse(flags, matches);
+
+  let source_file = matches.value_of("source_file").unwrap().to_string();
+
+  let out_file = if let Some(out_file) = matches.value_of("out_file") {
+    flags.allow_write = true;
+    Some(PathBuf::from(out_file))
+  } else {
+    None
+  };
+
+  flags.subcommand = DenoSubcommand::Package {
     source_file,
     out_file,
   };
@@ -798,6 +823,21 @@ fn bundle_subcommand<'a, 'b>() -> App<'a, 'b> {
 If no output file is given, the output is written to standard output:
   deno bundle https://deno.land/std/examples/colors.ts",
     )
+}
+
+fn pkg_subcommand<'a, 'b>() -> App<'a, 'b> {
+  compile_args(SubCommand::with_name("pkg"))
+    .arg(
+      Arg::with_name("source_file")
+        .takes_value(true)
+        .required(true),
+    )
+    .arg(Arg::with_name("out_file").takes_value(true).required(false))
+    .about("Bundle module and dependencies into single file")
+    .long_about(
+      "Package a single JavaScript file with all dependencies into an executable.
+  deno pkg https://deno.land/std/examples/colors.ts colors.bundle.js
+    ")
 }
 
 fn completions_subcommand<'a, 'b>() -> App<'a, 'b> {
