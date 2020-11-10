@@ -1,8 +1,13 @@
+use deno_core::error::AnyError;
+use flags::Flags;
+use crate::permissions::Permissions;
+use crate::program_state::ProgramState;
+use crate::worker::MainWorker;
+use crate::media_type::MediaType;
 
 pub async fn eval_command(
     flags: Flags,
     code: String,
-    as_typescript: bool,
     print: bool,
   ) -> Result<(), AnyError> {
     // Force TypeScript compile.
@@ -24,11 +29,7 @@ pub async fn eval_command(
     let file = File {
       local: main_module_url.to_file_path().unwrap(),
       maybe_types: None,
-      media_type: if as_typescript {
-        MediaType::TypeScript
-      } else {
-        MediaType::JavaScript
-      },
+      media_type: MediaType::JavaScript
       source: String::from_utf8(source_code)?,
       specifier: ModuleSpecifier::from(main_module_url),
     };
