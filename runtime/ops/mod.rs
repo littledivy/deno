@@ -2,25 +2,39 @@
 
 mod dispatch_minimal;
 pub use dispatch_minimal::MinimalOp;
-
+#[cfg(feature = "crypto")]
 pub mod crypto;
+#[cfg(feature = "fetch")]
 pub mod fetch;
+#[cfg(feature = "fs")]
 pub mod fs;
+#[cfg(feature = "fs")]
 pub mod fs_events;
+#[cfg(feature = "io")]
 pub mod io;
+#[cfg(feature = "fs")]
 pub mod net;
 #[cfg(unix)]
+#[cfg(feature = "net")]
 mod net_unix;
+#[cfg(feature = "os")]
 pub mod os;
 pub mod permissions;
+#[cfg(feature = "plugin")]
 pub mod plugin;
+#[cfg(feature = "process")]
 pub mod process;
 pub mod runtime;
+#[cfg(feature = "signal")]
 pub mod signal;
+#[cfg(feature = "timers")]
 pub mod timers;
+#[cfg(feature = "tls")]
 pub mod tls;
+#[cfg(feature = "tty")]
 pub mod tty;
 pub mod web_worker;
+#[cfg(feature = "websocket")]
 pub mod websocket;
 pub mod worker_host;
 

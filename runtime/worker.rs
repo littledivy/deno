@@ -9,6 +9,7 @@ use crate::ops;
 use crate::permissions::Permissions;
 use deno_core::error::AnyError;
 use deno_core::futures::future::poll_fn;
+#[cfg(feature = "webworkers")]
 use deno_core::futures::future::FutureExt;
 use deno_core::serde_json;
 use deno_core::serde_json::json;
@@ -112,18 +113,24 @@ impl MainWorker {
       }
 
       ops::runtime::init(js_runtime, main_module);
+      
+      #[cfg(feature = "fetch")]
       ops::fetch::init(
         js_runtime,
         options.user_agent.clone(),
         options.ca_data.clone(),
       );
+      #[cfg(feature = "timers")]
       ops::timers::init(js_runtime);
       ops::worker_host::init(
         js_runtime,
         None,
         options.create_web_worker_cb.clone(),
       );
+
+      #[cfg(feature = "crypto")]
       ops::crypto::init(js_runtime, options.seed);
+
       ops::reg_json_sync(js_runtime, "op_close", deno_core::op_close);
       ops::reg_json_sync(js_runtime, "op_resources", deno_core::op_resources);
       ops::reg_json_sync(
@@ -131,17 +138,32 @@ impl MainWorker {
         "op_domain_to_ascii",
         deno_web::op_domain_to_ascii,
       );
-      ops::fs_events::init(js_runtime);
-      ops::fs::init(js_runtime);
+
+      #[cfg(feature = "fs")]
+      {
+        ops::fs_events::init(js_runtime);
+        ops::fs::init(js_runtime);
+      }
+
+      #[cfg(feature = "io")]
       ops::io::init(js_runtime);
+      #[cfg(feature = "net")]
       ops::net::init(js_runtime);
+      #[cfg(feature = "os")]
       ops::os::init(js_runtime);
       ops::permissions::init(js_runtime);
+      #[cfg(feature = "plugin")]
       ops::plugin::init(js_runtime);
+      #[cfg(feature = "process")]
       ops::process::init(js_runtime);
+      #[cfg(feature = "signal")]
       ops::signal::init(js_runtime);
+      #[cfg(feature = "tls")]
       ops::tls::init(js_runtime);
+      #[cfg(feature = "tty")]
       ops::tty::init(js_runtime);
+
+      #[cfg(feature = "websocket")]
       ops::websocket::init(
         js_runtime,
         options.user_agent.clone(),

@@ -28,12 +28,29 @@ deno_websocket = { path = "../op_crates/websocket", version = "0.5.0" }
 winres = "0.1.11"
 winapi = "0.3.9"
 
+[features]
+default = []
+# "crypto", "websocket", "fetch", "os", "plugin", "timers", "inspector", "fs", "io", "process", "signal", "tls", "tty"
+timers = []
+fs = []
+io = []
+os = []
+plugin = []
+process = []
+signal = []
+tls = []
+tty = []
+inspector = []
+crypto = ["deno_crypto"]
+websocket = ["deno_websocket"]
+fetch = ["deno_fetch"]
+
 [dependencies]
 deno_core = { path = "../core", version = "0.79.0" }
-deno_crypto = { path = "../op_crates/crypto", version = "0.13.0" }
-deno_fetch = { path = "../op_crates/fetch", version = "0.22.0" }
+deno_crypto = { path = "../op_crates/crypto", version = "0.13.0", optional = true }
+deno_fetch = { path = "../op_crates/fetch", version = "0.22.0", optional = true }
 deno_web = { path = "../op_crates/web", version = "0.30.0" }
-deno_websocket = { path = "../op_crates/websocket", version = "0.5.0" }
+deno_websocket = { path = "../op_crates/websocket", version = "0.5.0", optional = true }
 
 atty = "0.2.14"
 dlopen = "0.1.8"
