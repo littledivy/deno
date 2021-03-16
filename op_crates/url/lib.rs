@@ -12,6 +12,7 @@ use deno_core::url::quirks;
 use deno_core::url::Url;
 use deno_core::JsRuntime;
 use deno_core::ZeroCopyBuf;
+use deno_proc_macro::init_js;
 use serde::Deserialize;
 use serde::Serialize;
 use std::panic::catch_unwind;
@@ -142,13 +143,7 @@ pub fn op_url_stringify_search_params(
   Ok(json!(search))
 }
 
-/// Load and execute the javascript code.
-pub fn init(isolate: &mut JsRuntime) {
-  let files = vec![("deno:op_crates/url/00_url.js", include_str!("00_url.js"))];
-  for (url, source_code) in files {
-    isolate.execute(url, source_code).unwrap();
-  }
-}
+init_js!("op_crates/url");
 
 pub fn get_declaration() -> PathBuf {
   PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("lib.deno_url.d.ts")

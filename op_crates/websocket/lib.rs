@@ -19,6 +19,7 @@ use deno_core::OpState;
 use deno_core::RcRef;
 use deno_core::Resource;
 use deno_core::{serde_json, ZeroCopyBuf};
+use deno_proc_macro::init_js;
 
 use http::{Method, Request, Uri};
 use serde::Deserialize;
@@ -340,15 +341,7 @@ pub async fn op_ws_next_event(
   Ok(res)
 }
 
-/// Load and execute the javascript code.
-pub fn init(isolate: &mut JsRuntime) {
-  isolate
-    .execute(
-      "deno:op_crates/websocket/01_websocket.js",
-      include_str!("01_websocket.js"),
-    )
-    .unwrap();
-}
+init_js!("op_crates/websocket");
 
 pub fn get_declaration() -> PathBuf {
   PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("lib.deno_websocket.d.ts")

@@ -10,52 +10,41 @@ use syn::StrStyle;
 use syn::Token;
 use syn::TokenTree;
 
-use std::path::Path;
 use std::path::PathBuf;
 use std::str;
 
 #[proc_macro]
 pub fn init_js(input: TokenStream) -> TokenStream {
-  let foo = input.to_string();
-  let args = parse_token_trees(&foo).unwrap();
-  let gen = impl_init_js(args).unwrap();
-  gen.parse().unwrap()
+  let directory = input.to_string();
+  let args = parse_token_trees(&directory).unwrap();
+
+  init_js_impl(args).unwrap().parse().unwrap()
 }
 
-fn get_files<P: AsRef<Path>>(dir: P) -> Vec<PathBuf> {
-  let mut files = vec![];
-  let listing: Vec<_> = ::std::fs::read_dir(dir)
-    .expect("Failed to read directory")
-    .map(|entry| entry.unwrap().path())
-    .collect();
-  for path in listing {
-    if path.is_file() && path.to_string_lossy().ends_with(".js") {
-      files.push(path)
-    }
-  }
-  files
-}
-
-fn get_path_from_args(args: Vec<TokenTree>) -> Result<PathBuf, &'static str> {
-  match args.len() {
+fn init_js_impl(args: Vec<TokenTree>) -> Result<quote::Tokens, &'static str> {
+  let dir: PathBuf = match args.len() {
     1 => {
       let nexttree = args.into_iter().next().unwrap();
       match nexttree {
-        TokenTree::Token(Token::Literal(Lit::Str(ref val, ..))) => {
-          Ok(val.into())
-        }
-        _ => Err("Expected str."),
+        TokenTree::Token(Token::Literal(Lit::Str(ref val, ..))) => val.into(),
+        _ => return Err("Expected string literal."),
       }
     }
-    _ => Err("Expected 1 argument."),
-  }
-}
+    _ => return Err("Expected 1 argument."),
+  };
 
-fn impl_init_js(args: Vec<TokenTree>) -> Result<quote::Tokens, &'static str> {
-  let dir = get_path_from_args(args)?;
-  let paths: Vec<_> = get_files(&dir);
+  let listing: Vec<_> = std::fs::read_dir(dir.clone())
+    .expect("Failed to read directory")
+    .map(|entry| entry.unwrap().path())
+    .collect();
+  let mut files: Vec<&PathBuf> = listing
+    .iter()
+    .filter(|path| path.is_file() && path.to_string_lossy().ends_with(".js"))
+    .collect();
 
-  let keys: Vec<_> = paths
+  files.sort();
+
+  let keys: Vec<_> = files
     .iter()
     .map(|path| {
       let path = path.strip_prefix(&dir).unwrap();
@@ -66,7 +55,7 @@ fn impl_init_js(args: Vec<TokenTree>) -> Result<quote::Tokens, &'static str> {
     })
     .collect();
 
-  let vals: Vec<_> = paths
+  let vals: Vec<_> = files
     .iter()
     .map(|path| {
       let path = std::fs::canonicalize(path).expect("File not found");

@@ -23,6 +23,7 @@ use deno_core::OpState;
 use deno_core::RcRef;
 use deno_core::Resource;
 use deno_core::ZeroCopyBuf;
+use deno_proc_macro::init_js;
 
 use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
@@ -48,38 +49,7 @@ use tokio_util::io::StreamReader;
 
 pub use reqwest; // Re-export reqwest
 
-/// Execute this crates' JS source files.
-pub fn init(isolate: &mut JsRuntime) {
-  let files = vec![
-    (
-      "deno:op_crates/fetch/01_fetch_util.js",
-      include_str!("01_fetch_util.js"),
-    ),
-    (
-      "deno:op_crates/fetch/03_dom_iterable.js",
-      include_str!("03_dom_iterable.js"),
-    ),
-    (
-      "deno:op_crates/fetch/11_streams.js",
-      include_str!("11_streams.js"),
-    ),
-    (
-      "deno:op_crates/fetch/20_headers.js",
-      include_str!("20_headers.js"),
-    ),
-    (
-      "deno:op_crates/fetch/21_file.js",
-      include_str!("21_file.js"),
-    ),
-    (
-      "deno:op_crates/fetch/26_fetch.js",
-      include_str!("26_fetch.js"),
-    ),
-  ];
-  for (url, source_code) in files {
-    isolate.execute(url, source_code).unwrap();
-  }
-}
+init_js!("op_crates/fetch");
 
 pub trait FetchPermissions {
   fn check_net_url(&self, _url: &Url) -> Result<(), AnyError>;

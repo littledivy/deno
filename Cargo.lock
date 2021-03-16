@@ -551,6 +551,7 @@ name = "deno_console"
 version = "0.1.0"
 dependencies = [
  "deno_core",
+ "deno_proc_macro",
 ]
 
 [[package]]
@@ -603,6 +604,7 @@ version = "0.23.0"
 dependencies = [
  "bytes",
  "deno_core",
+ "deno_proc_macro",
  "reqwest",
  "serde",
  "tokio",
@@ -685,6 +687,7 @@ name = "deno_url"
 version = "0.1.0"
 dependencies = [
  "deno_core",
+ "deno_proc_macro",
  "idna",
  "serde",
 ]
@@ -694,6 +697,7 @@ name = "deno_web"
 version = "0.31.0"
 dependencies = [
  "deno_core",
+ "deno_proc_macro",
  "futures",
 ]
 
@@ -702,6 +706,7 @@ name = "deno_webgpu"
 version = "0.2.0"
 dependencies = [
  "deno_core",
+ "deno_proc_macro",
  "serde",
  "tokio",
  "wgpu-core",
@@ -713,6 +718,7 @@ name = "deno_webidl"
 version = "0.1.0"
 dependencies = [
  "deno_core",
+ "deno_proc_macro",
 ]
 
 [[package]]
@@ -720,6 +726,7 @@ name = "deno_websocket"
 version = "0.6.0"
 dependencies = [
  "deno_core",
+ "deno_proc_macro",
  "http",
  "serde",
  "tokio",

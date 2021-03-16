@@ -15,5 +15,6 @@ path = "lib.rs"
 
 [dependencies]
 deno_core = { version = "0.81.0", path = "../../core" }
+deno_proc_macro = { path = "../../macro" }
 idna = "0.2.1"
 serde = { version = "1.0.123", features = ["derive"] }

@@ -6,9 +6,11 @@ use deno_core::error::AnyError;
 use deno_core::error::{bad_resource_id, not_supported};
 use deno_core::serde_json::json;
 use deno_core::serde_json::Value;
+use deno_core::JsRuntime;
 use deno_core::OpState;
 use deno_core::ZeroCopyBuf;
 use deno_core::{BufVec, Resource};
+use deno_proc_macro::init_js;
 use serde::Deserialize;
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -54,6 +56,8 @@ pub mod sampler;
 pub mod shader;
 pub mod texture;
 
+init_js!("op_crates/webgpu");
+
 pub struct Unstable(pub bool);
 
 fn check_unstable(state: &OpState, api_name: &str) {
@@ -88,23 +92,6 @@ struct WebGPUQuerySet(wgpu_core::id::QuerySetId);
 impl Resource for WebGPUQuerySet {
   fn name(&self) -> Cow<str> {
     "webGPUQuerySet".into()
-  }
-}
-
-/// Execute this crates' JS source files.
-pub fn init(isolate: &mut deno_core::JsRuntime) {
-  let files = vec![
-    (
-      "deno:op_crates/webgpu/01_webgpu.js",
-      include_str!("01_webgpu.js"),
-    ),
-    (
-      "deno:op_crates/webgpu/02_idl_types.js",
-      include_str!("02_idl_types.js"),
-    ),
-  ];
-  for (url, source_code) in files {
-    isolate.execute(url, source_code).unwrap();
   }
 }
 
