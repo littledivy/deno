@@ -1,0 +1,17 @@
+[package]
+name = "deno_proc_macro"
+version = "0.1.0"
+edition = "2018"
+description = "Proc macro utilities for Deno"
+authors = ["the Deno authors"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/denoland/deno"
+
+[lib]
+path = "lib.rs"
+proc-macro = true
+
+[dependencies]
+syn = "0.11"
+quote = "0.3"
