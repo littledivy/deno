@@ -49,7 +49,7 @@ fn init_js_impl(args: Vec<TokenTree>) -> Result<quote::Tokens, &'static str> {
     .map(|path| {
       let path = path.strip_prefix(&dir).unwrap();
       Token::Literal(Lit::Str(
-        path.to_str().unwrap().to_owned(),
+        "deno:".to_string() + &path.to_str().unwrap().to_owned(),
         StrStyle::Cooked,
       ))
     })
