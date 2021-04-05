@@ -4,6 +4,15 @@
 ((window) => {
   const core = window.Deno.core;
 
+  const crypto = window.__bootstrap?.crypto;
+  if (!crypto) throw new TypeError("Depends on deno_crypto");
+
+  function generateUUID() {
+    return "00000000-0000-4000-8000-000000000000".replace(/[0]/g, () =>
+      // random integer from 0 to 15 as a hex digit.
+      (crypto.getRandomValues(new Uint8Array(1))[0] % 16).toString(16));
+  }
+
   function requiredArguments(name, length, required) {
     if (length < required) {
       const errMsg = `${name} requires at least ${required} argument${
@@ -194,6 +203,8 @@
   }
 
   const parts = new WeakMap();
+  // Keep it outside of URL to avoid any attempts of access.
+  const blobURLMap = new Map();
 
   class URL {
     #searchParams = null;
@@ -390,12 +401,26 @@
       return this.href;
     }
 
-    static createObjectURL() {
-      throw new Error("Not implemented");
+    static createObjectURL(blob) {
+      const origin = "http://deno-opaque-origin";
+      const key = `blob:${origin}/${generateUUID()}`;
+      blobURLMap.set(key, blob);
+      return key;
     }
 
-    static revokeObjectURL() {
-      throw new Error("Not implemented");
+    static revokeObjectURL(url) {
+      let urlObject;
+      try {
+        urlObject = new URL(url);
+      } catch {
+        throw new TypeError("Provided URL string is not valid");
+      }
+      if (urlObject.protocol !== "blob:") {
+        return;
+      }
+      // Origin match check seems irrelevant for now, unless we implement
+      // persisten storage for per globalThis.location.origin at some point.
+      blobURLMap.delete(url);
     }
   }
 
