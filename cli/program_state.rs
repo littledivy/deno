@@ -167,6 +167,7 @@ impl ProgramState {
       let result_info = graph.transpile(TranspileOptions {
         debug,
         maybe_config_path,
+        jsx: self.flags.jsx.clone(),
         reload: self.flags.reload,
       })?;
       debug!("{}", result_info.stats);
@@ -180,6 +181,7 @@ impl ProgramState {
         emit: true,
         lib,
         maybe_config_path,
+        jsx: self.flags.jsx.clone(),
         reload: self.flags.reload,
       })?;
 

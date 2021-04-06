@@ -215,6 +215,7 @@ pub fn compile_to_runtime_flags(
     import_map_path: None,
     inspect: None,
     inspect_brk: None,
+    jsx: flags.jsx,
     location: flags.location,
     lock: None,
     lock_write: false,

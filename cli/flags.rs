@@ -145,6 +145,7 @@ pub struct Flags {
   pub import_map_path: Option<String>,
   pub inspect: Option<SocketAddr>,
   pub inspect_brk: Option<SocketAddr>,
+  pub jsx: Option<String>,
   pub lock: Option<PathBuf>,
   pub lock_write: bool,
   pub log_level: Option<Level>,
@@ -617,6 +618,21 @@ fn lock_args_parse(flags: &mut Flags, matches: &clap::ArgMatches) {
   }
 }
 
+fn jsx_args_parse(flags: &mut Flags, matches: &clap::ArgMatches) {
+  if matches.is_present("jsx") {
+    let jsx_factory = matches.value_of("jsx").unwrap();
+    flags.jsx = Some(String::from(jsx_factory));
+  }
+}
+
+fn jsx_arg<'a, 'b>() -> Arg<'a, 'b> {
+  Arg::with_name("jsx")
+    .long("jsx")
+    .value_name("jsx")
+    .help("Specifiy custom jsx factory")
+    .takes_value(true)
+}
+
 fn compile_args<'a, 'b>(app: App<'a, 'b>) -> App<'a, 'b> {
   app
     .arg(import_map_arg())
@@ -627,6 +643,7 @@ fn compile_args<'a, 'b>(app: App<'a, 'b>) -> App<'a, 'b> {
     .arg(lock_arg())
     .arg(lock_write_arg())
     .arg(ca_file_arg())
+    .arg(jsx_arg())
 }
 
 fn compile_args_parse(flags: &mut Flags, matches: &clap::ArgMatches) {
@@ -637,6 +654,7 @@ fn compile_args_parse(flags: &mut Flags, matches: &clap::ArgMatches) {
   reload_arg_parse(flags, matches);
   lock_args_parse(flags, matches);
   ca_file_arg_parse(flags, matches);
+  jsx_args_parse(flags, matches);
 }
 
 fn runtime_args<'a, 'b>(
@@ -684,7 +702,6 @@ fn runtime_args_parse(
 
 fn run_parse(flags: &mut Flags, matches: &clap::ArgMatches) {
   runtime_args_parse(flags, matches, true, true);
-
   let mut script: Vec<String> = matches
     .values_of("script_arg")
     .unwrap()

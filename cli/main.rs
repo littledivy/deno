@@ -548,6 +548,7 @@ async fn create_module_graph_and_maybe_check(
         emit: false,
         lib,
         maybe_config_path: program_state.flags.config_path.clone(),
+        jsx: program_state.flags.jsx.clone(),
         reload: program_state.flags.reload,
       })?;
 
@@ -572,6 +573,7 @@ fn bundle_module_graph(
     module_graph.bundle(module_graph::BundleOptions {
       debug,
       maybe_config_path: flags.config_path,
+      jsx: flags.jsx,
     })?;
   match maybe_ignored_options {
     Some(ignored_options) if flags.no_check => {

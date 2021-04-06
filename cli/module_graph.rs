@@ -583,6 +583,9 @@ pub struct BundleOptions {
   /// file that augments the the default configuration passed to the TypeScript
   /// compiler.
   pub maybe_config_path: Option<String>,
+  /// An optional string that points to the user supplied JSX factory. Ignored if
+  /// `jsxFactory` specified in compiler options.
+  pub jsx: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -597,6 +600,9 @@ pub struct CheckOptions {
   /// file that augments the the default configuration passed to the TypeScript
   /// compiler.
   pub maybe_config_path: Option<String>,
+  /// An optional string that points to the user supplied JSX factory. Ignored if
+  /// `jsxFactory` specified in compiler options.
+  pub jsx: Option<String>,
   /// Ignore any previously emits and ensure that all files are emitted from
   /// source.
   pub reload: bool,
@@ -646,6 +652,9 @@ pub struct TranspileOptions {
   /// file that augments the the default configuration passed to the TypeScript
   /// compiler.
   pub maybe_config_path: Option<String>,
+  /// An optional string that points to the user supplied JSX factory. Ignored if
+  /// `jsxFactory` specified in compiler options.
+  pub jsx: Option<String>,
   /// Ignore any previously emits and ensure that all files are emitted from
   /// source.
   pub reload: bool,
@@ -797,6 +806,7 @@ impl Graph {
       "experimentalDecorators": true,
       "incremental": true,
       "jsx": "react",
+      "jsxFactory": options.jsx.unwrap_or("React.createElement".to_string()),
       "isolatedModules": true,
       "lib": options.lib,
       "module": "esnext",
@@ -1589,7 +1599,7 @@ impl Graph {
       "importsNotUsedAsValues": "remove",
       "inlineSourceMap": true,
       "jsx": "react",
-      "jsxFactory": "React.createElement",
+      "jsxFactory": options.jsx.unwrap_or("React.createElement".to_string()),
       "jsxFragmentFactory": "React.Fragment",
     }));
 
