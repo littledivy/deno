@@ -5,7 +5,7 @@ use deno_core::RuntimeOptions;
 use std::env;
 use std::path::Path;
 use std::path::PathBuf;
-
+use std::process::Command;
 // TODO(bartlomieju): this module contains a lot of duplicated
 // logic with `cli/build.rs`, factor out to `deno_core`.
 fn create_snapshot(
@@ -13,15 +13,6 @@ fn create_snapshot(
   snapshot_path: &Path,
   files: Vec<PathBuf>,
 ) {
-  deno_webidl::init(&mut js_runtime);
-  deno_console::init(&mut js_runtime);
-  deno_url::init(&mut js_runtime);
-  deno_web::init(&mut js_runtime);
-  deno_file::init(&mut js_runtime);
-  deno_fetch::init(&mut js_runtime);
-  deno_websocket::init(&mut js_runtime);
-  deno_crypto::init(&mut js_runtime);
-  deno_webgpu::init(&mut js_runtime);
   // TODO(nayeemrmn): https://github.com/rust-lang/cargo/issues/3946 to get the
   // workspace root.
   let display_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
@@ -44,11 +35,29 @@ fn create_snapshot(
   println!("Snapshot written to: {} ", snapshot_path.display());
 }
 
+fn save_private_snapshot(mut js_runtime: &JsRuntime, path: &Path) {
+
+}
+
 fn create_runtime_snapshot(snapshot_path: &Path, files: Vec<PathBuf>) {
   let js_runtime = JsRuntime::new(RuntimeOptions {
     will_snapshot: true,
     ..Default::default()
   });
+
+  deno_webidl::init(&mut js_runtime);
+  deno_console::init(&mut js_runtime);
+  deno_url::init(&mut js_runtime);
+  deno_web::init(&mut js_runtime);
+  deno_file::init(&mut js_runtime);
+  deno_fetch::init(&mut js_runtime);
+  deno_websocket::init(&mut js_runtime);
+  deno_crypto::init(&mut js_runtime);
+
+  let changes = get_changes();
+  if changes.iter().find(|c| c.starts_with("op_crates/webgpu")).is_some() {
+    deno_webgpu::init(&mut js_runtime);
+  }
   create_snapshot(js_runtime, snapshot_path, files);
 }
 
@@ -68,6 +77,9 @@ fn main() {
   // Main snapshot
   let runtime_snapshot_path = o.join("CLI_SNAPSHOT.bin");
 
+  // WebGPU snapshot
+  let wgpu_snapshot = o.join("WGPU_SNAPSHOT.bin");
+  
   let js_files = get_js_files("js");
   create_runtime_snapshot(&runtime_snapshot_path, js_files);
 }
@@ -84,4 +96,25 @@ fn get_js_files(d: &str) -> Vec<PathBuf> {
     .collect::<Vec<PathBuf>>();
   js_files.sort();
   js_files
+}
+
+fn get_changes() -> Vec<String> {
+  let output = Command::new("git")
+    .args(&[
+      "ls-files",
+      ".",
+      "-d",
+      "-m",
+      "-o",
+      "--exclude-standard",
+      "--full-name",
+      "-v",
+    ])
+    .output()
+    .unwrap();
+
+  let changes = String::from_utf8(output.stdout);
+  changes
+    .split('\n')
+    .map(|c| c.split_whitespace().get(1).unwrap())
 }
