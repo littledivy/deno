@@ -553,6 +553,15 @@ pub async fn op_webcrypto_sign_key(
   })
 }
 
+pub async fn op_webcrypto_sign_key(
+  state: Rc<RefCell<OpState>>,
+  // Reusing WebCryptoSignArg here
+  args: WebCryptoSignArg,
+  zero_copy: Option<ZeroCopyBuf>,
+) -> Result<SignResult, AnyError> {
+  
+}
+
 pub fn get_declaration() -> PathBuf {
   PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("lib.deno_crypto.d.ts")
 }
