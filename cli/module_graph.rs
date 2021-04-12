@@ -889,7 +889,7 @@ impl Graph {
               continue;
             }
             match emit.media_type {
-              MediaType::JavaScript => {
+              MediaType::JavaScript |  MediaType::TypeScript => {
                 codes.insert(specifier.clone(), emit.data.clone());
               }
               MediaType::SourceMap => {

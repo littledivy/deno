@@ -485,7 +485,7 @@ delete Object.prototype.__proto__;
     // which is not allowed to be passed in JSON, we need it to allow special
     // URLs which Deno supports. So we need to either ignore the diagnostic, or
     // inject it ourselves.
-    Object.assign(options, { allowNonTsExtensions: true });
+    Object.assign(options, { allowNonTsExtensions: true, declaration: true });
     const program = ts.createIncrementalProgram({
       rootNames,
       options,
