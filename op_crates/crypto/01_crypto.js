@@ -37,7 +37,7 @@
       arrayBufferView.byteOffset,
       arrayBufferView.byteLength,
     );
-    core.jsonOpSync("op_crypto_get_random_values", null, ui8);
+    core.opSync("op_crypto_get_random_values", null, ui8);
     return arrayBufferView;
   }
 
@@ -134,7 +134,7 @@
   async function generateKey(algorithm, extractable, keyUsages) {
     const normalizedAlgorithm = normalize(algorithm);
 
-    const { key, err } = await core.jsonOpAsync("op_webcrypto_generate_key", {
+    const { key, err } = await core.opAsync("op_webcrypto_generate_key", {
       algorithm: normalizedAlgorithm,
       extractable,
       keyUsages,
@@ -180,7 +180,7 @@
     const hash = simpleAlg ? null : alg.hash;
     const algorithm = (simpleAlg ? alg : alg.name).toLowerCase();
 
-    const { signature, err } = await core.jsonOpAsync("op_webcrypto_sign_key", {
+    const { signature, err } = await core.opAsync("op_webcrypto_sign_key", {
       rid,
       algorithm,
       saltLength,
