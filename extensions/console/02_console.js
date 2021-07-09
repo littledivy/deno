@@ -621,58 +621,118 @@
    * before any backslash.
    */
   function quoteString(string) {
-    const quote =
-      ArrayPrototypeFind(QUOTES, (c) => !StringPrototypeIncludes(string, c)) ??
-        QUOTES[0];
-    const escapePattern = new RegExp(`(?=[${quote}\\\\])`, "g");
-    string = StringPrototypeReplace(string, escapePattern, "\\");
+   
     string = replaceEscapeSequences(string);
-    return `${quote}${string}${quote}`;
+    return string;
+  }
+  
+  // Copyright Joyent, Inc. and other Node contributors. MIT license.
+  // Forked from Node's lib/internal/util/inspect.js
+
+  // deno-lint-ignore no-control-regex
+  const strEscapeSequencesRegExp = /[\x00-\x1f\x27\x5c\x7f-\x9f]/;
+  // deno-lint-ignore no-control-regex
+  const strEscapeSequencesReplacer = /[\x00-\x1f\x27\x5c\x7f-\x9f]/g;
+  // deno-lint-ignore no-control-regex
+  const strEscapeSequencesRegExpSingle = /[\x00-\x1f\x5c\x7f-\x9f]/;
+  // deno-lint-ignore no-control-regex
+  const strEscapeSequencesReplacerSingle = /[\x00-\x1f\x5c\x7f-\x9f]/g;
+  
+  // Escaped control characters (plus the single quote and the backslash). Use
+  // empty strings to fill up unused entries.
+  const meta = [
+    '\\x00', '\\x01', '\\x02', '\\x03', '\\x04', '\\x05', '\\x06', '\\x07', // x07
+    '\\b', '\\t', '\\n', '\\x0B', '\\f', '\\r', '\\x0E', '\\x0F',           // x0F
+    '\\x10', '\\x11', '\\x12', '\\x13', '\\x14', '\\x15', '\\x16', '\\x17', // x17
+    '\\x18', '\\x19', '\\x1A', '\\x1B', '\\x1C', '\\x1D', '\\x1E', '\\x1F', // x1F
+    '', '', '', '', '', '', '', "\\'", '', '', '', '', '', '', '', '',      // x2F
+    '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',         // x3F
+    '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',         // x4F
+    '', '', '', '', '', '', '', '', '', '', '', '', '\\\\', '', '', '',     // x5F
+    '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',         // x6F
+    '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '\\x7F',    // x7F
+    '\\x80', '\\x81', '\\x82', '\\x83', '\\x84', '\\x85', '\\x86', '\\x87', // x87
+    '\\x88', '\\x89', '\\x8A', '\\x8B', '\\x8C', '\\x8D', '\\x8E', '\\x8F', // x8F
+    '\\x90', '\\x91', '\\x92', '\\x93', '\\x94', '\\x95', '\\x96', '\\x97', // x97
+    '\\x98', '\\x99', '\\x9A', '\\x9B', '\\x9C', '\\x9D', '\\x9E', '\\x9F', // x9F
+  ];
+
+  function addQuotes(str, quotes) {
+    if (quotes === -1) {
+      return `"${str}"`;
+    }
+    if (quotes === -2) {
+      return `\`${str}\``;
+    }
+    return `'${str}'`;
   }
 
+  const escapeFn = (str) => meta[StringPrototypeCharCodeAt(str)];
+
   // Replace escape sequences that can modify output.
-  function replaceEscapeSequences(string) {
-    return StringPrototypeReplace(
-      StringPrototypeReplace(
-        StringPrototypeReplace(
-          StringPrototypeReplace(
-            StringPrototypeReplace(
-              StringPrototypeReplace(
-                StringPrototypeReplace(string, /[\b]/g, "\\b"),
-                /\f/g,
-                "\\f",
-              ),
-              /\n/g,
-              "\\n",
-            ),
-            /\r/g,
-            "\\r",
-          ),
-          /\t/g,
-          "\\t",
-        ),
-        /\v/g,
-        "\\v",
-      ),
-      // deno-lint-ignore no-control-regex
-      /[\x00-\x1f\x7f-\x9f]/g,
-      (c) =>
-        "\\x" +
-        StringPrototypePadStart(
-          NumberPrototypeToString(StringPrototypeCharCodeAt(c, 0), 16),
-          2,
-          "0",
-        ),
-    );
+  function replaceEscapeSequences(str) {
+    let escapeTest = strEscapeSequencesRegExp;
+    let escapeReplace = strEscapeSequencesReplacer;
+    let singleQuote = 39;
+
+    // Check for double quotes. If not present, do not escape single quotes and
+    // instead wrap the text in double quotes. If double quotes exist, check for
+    // backticks. If they do not exist, use those as fallback instead of the
+    // double quotes.
+    if (str.includes("'")) {
+      // This invalidates the charCode and therefore can not be matched for
+      // anymore.
+      if (!str.includes('"')) {
+        singleQuote = -1;
+      } else if (!str.includes('`') &&
+                !str.includes('${')) {
+        singleQuote = -2;
+      }
+      if (singleQuote !== 39) {
+        escapeTest = strEscapeSequencesRegExpSingle;
+        escapeReplace = strEscapeSequencesReplacerSingle;
+      }
+    }
+
+    // Some magic numbers that worked out fine while benchmarking with v8 6.0
+    // if (str.length < 5000 && !RegExpPrototypeTest(escapeTest, str))
+    // return addQuotes(str, singleQuote);
+    if (str.length > 100) {
+      str = str.replace(escapeReplace, escapeFn);
+      return addQuotes(str, singleQuote);
+    }
+
+    let result = '';
+    let last = 0;
+    const lastIndex = str.length;
+    for (let i = 0; i < lastIndex; i++) {
+      const point = str.charCodeAt(i);
+      if (point === singleQuote ||
+          point === 92 ||
+          point < 32 ||
+          (point > 126 && point < 160)) {
+        if (last === i) {
+          result += meta[point];
+        } else {
+          result += `${str.slice(last, i)}${meta[point]}`;
+        }
+        last = i + 1;
+      }
+    }
+
+    if (last !== lastIndex) {
+      result += str.slice(last);
+    }
+    return addQuotes(result, singleQuote);
   }
 
   // Surround a string with quotes when it is required (e.g the string not a valid identifier).
   function maybeQuoteString(string) {
-    if (RegExpPrototypeTest(/^[a-zA-Z_][a-zA-Z_0-9]*$/, string)) {
+   // if (RegExpPrototypeTest(/^[a-zA-Z_][a-zA-Z_0-9]*$/, string)) {
       return replaceEscapeSequences(string);
-    }
+    //}
 
-    return quoteString(string);
+    //return quoteString(string);
   }
 
   // Surround a symbol's description in quotes when it is required (e.g the description has non printable characters).
