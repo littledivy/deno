@@ -882,7 +882,60 @@
         // 17-20.
         return { publicKey, privateKey };
       }
-      // TODO(lucacasonato): ECDH
+      case "ECDH": {
+        // 1.
+        if (
+          ArrayPrototypeFind(
+            usages,
+            (u) => !ArrayPrototypeIncludes(["deriveKey", "deriveBits"], u),
+          ) !== undefined
+        ) {
+          throw new DOMException("Invalid key usages", "SyntaxError");
+        }
+        
+        // 2-3.
+        const handle = {};
+        if (
+          ArrayPrototypeIncludes(
+            supportedNamedCurves,
+            normalizedAlgorithm.namedCurve,
+          )
+        ) {
+          const keyData = await core.opAsync("op_crypto_generate_key", {
+            name: "ECDH",
+            namedCurve: normalizedAlgorithm.namedCurve,
+          });
+          WeakMapPrototypeSet(KEY_STORE, handle, {
+            type: "pkcs8",
+            data: keyData,
+          });
+        } else {
+          throw new DOMException("Curve not supported", "NotSupportedError");
+        }
+
+        const algorithm = {
+          name: "ECDH",
+          namedCurve: normalizedAlgorithm.namedCurve,
+        };
+
+        const publicKey = constructKey(
+          "public",
+          true,
+          [],
+          algorithm,
+          handle,
+        );
+
+        const privateKey = constructKey(
+          "private",
+          extractable,
+          usageIntersection(usages, ["deriveKey", "deriveBits"]),
+          algorithm,
+          handle,
+        );
+
+        return { publicKey, privateKey };
+      }
       // TODO(lucacasonato): AES-CTR
       // TODO(lucacasonato): AES-CBC
       // TODO(lucacasonato): AES-GCM

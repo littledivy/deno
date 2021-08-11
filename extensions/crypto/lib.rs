@@ -31,6 +31,8 @@ use ring::rand as RingRand;
 use ring::rand::SecureRandom;
 use ring::signature::EcdsaKeyPair;
 use ring::signature::EcdsaSigningAlgorithm;
+use ring::agreement::Algorithm as RingAlgorithm;
+use ring::agreement::EphemeralPrivateKey;
 use rsa::padding::PaddingScheme;
 use rsa::pkcs8::FromPrivateKey;
 use rsa::pkcs8::ToPrivateKey;
@@ -205,6 +207,24 @@ pub async fn op_crypto_generate_key(
       })?;
 
       key_bytes.to_vec()
+    }
+    Algorithm::Ecdh => {
+      let curve: &RingAlgorithm =
+        args.named_curve.ok_or_else(not_supported)?.into();
+      let rng = RingRand::SystemRandom::new();
+      let private_key: Vec<u8> = tokio::task::spawn_blocking(
+        move || -> Result<Vec<u8>, ring::error::Unspecified> {
+          let pkcs8 = EphemeralPrivateKey::generate_pkcs8(curve, &rng)?;
+          Ok(pkcs8.as_ref().to_vec())
+        },
+      )
+      .await
+      .unwrap()
+      .map_err(|_| {
+        custom_error("DOMExceptionOperationError", "Key generation failed")
+      })?;
+
+      private_key
     }
     _ => return Err(not_supported()),
   };
