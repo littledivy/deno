@@ -415,20 +415,6 @@
           return cipherText.buffer;
         }
         case "AES-GCM": {
-          // 1.
-          if(normalizedAlgorithm.counter.length !== 16) {
-            throw new DOMException(
-              "Invalid counter length",
-              "OperationError",
-            );
-          }
-          // 2.
-          if(normalizedAlgorithm.length == 0 || normalizedAlgorithm.length > 128) {
-            throw new DOMException(
-              "Invalid length",
-              "OperationError",
-            );
-          }
           // 3.
           const cipherText = await core.opAsync("op_crypto_encrypt_key", {
             key: keyData,

@@ -215,7 +215,7 @@ pub async fn op_crypto_generate_key(
       let length = args.length.ok_or_else(not_supported)?;
 
       let rng = RingRand::SystemRandom::new();
-      const MAX_KEY_SIZE = 256 / 8;
+      const MAX_KEY_SIZE: usize = 256 / 8;
       let mut key_bytes = [0; MAX_KEY_SIZE];
       let key_bytes = &mut key_bytes[..length];
       rng.fill(key_bytes).map_err(|_| {
@@ -582,8 +582,13 @@ pub async fn op_crypto_derive_bits(
 pub struct EncryptArg {
   key: KeyData,
   algorithm: Algorithm,
+  // RSA-OAEP
   hash: Option<CryptoHash>,
   label: Option<ZeroCopyBuf>,
+  // AES-GCM
+  iv: Option<ZeroCopyBuf>,
+  additional_data: Option<ZeroCopyBuf>,
+  tag_length: Option<u8>,
 }
 
 pub async fn op_crypto_encrypt_key(
@@ -637,6 +642,35 @@ pub async fn op_crypto_encrypt_key(
       )
     }
     Algorithm::AesGcm => {
+      let iv = args
+        .iv
+        .ok_or_else(|| type_error("Missing argument iv".to_string()))?;
+      
+      // 1.
+      if data.len() > (2usize.pow(39)) - 256 {
+        return Err(custom_error("DOMExceptionOperationError", "plaintext too long".to_string()));
+      }
+      // 2.
+      if iv.len() >  (2usize.pow(64)) - 1  {
+        return Err(custom_error("DOMExceptionOperationError", "iv too long".to_string()));
+      }
+      // 3.
+      if let Some(additional_data) = args.additional_data {
+        if additional_data.len() > (2usize.pow(64)) - 1 {
+          return Err(custom_error("DOMExceptionOperationError", "additional data not supported".to_string()));
+        }
+      }
+      // 4.
+      let tag_length = match args.tag_length {
+        Some(length) => {
+          match length {
+            3 | 64 | 96 | 104 | 112 | 120 | 128 => length,
+            _ => return Err(custom_error("DOMExceptionOperationError", "Invalid tag length".to_string())),
+          }
+        },
+        None => 128,
+      };
+
       
     }
     _ => Err(type_error("Unsupported algorithm".to_string())),
