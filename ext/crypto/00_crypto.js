@@ -78,6 +78,7 @@
       "RSA-OAEP": "RsaHashedKeyGenParams",
       "ECDSA": "EcKeyGenParams",
       "HMAC": "HmacKeyGenParams",
+      "AES-GCM": "AesKeyGenParams",
     },
     "sign": {
       "RSASSA-PKCS1-v1_5": null,
@@ -411,6 +412,30 @@
           }, data);
 
           // 6.
+          return cipherText.buffer;
+        }
+        case "AES-GCM": {
+          // 1.
+          if(normalizedAlgorithm.counter.length !== 16) {
+            throw new DOMException(
+              "Invalid counter length",
+              "OperationError",
+            );
+          }
+          // 2.
+          if(normalizedAlgorithm.length == 0 || normalizedAlgorithm.length > 128) {
+            throw new DOMException(
+              "Invalid length",
+              "OperationError",
+            );
+          }
+          // 3.
+          const cipherText = await core.opAsync("op_crypto_encrypt_key", {
+            key: keyData,
+            algorithm: "RSA-OAEP",
+          }, data);
+
+          // 4.
           return cipherText.buffer;
         }
         default:
@@ -1372,8 +1397,50 @@
       // TODO(lucacasonato): ECDH
       // TODO(lucacasonato): AES-CTR
       // TODO(lucacasonato): AES-CBC
-      // TODO(lucacasonato): AES-GCM
       // TODO(lucacasonato): AES-KW
+      case "AES-GCM": {
+        // 1.
+        if (
+          ArrayPrototypeFind(
+            usages,
+            (u) => !ArrayPrototypeIncludes(["encrypt", "decrypt", "wrapKey", "unwrapKey"], u),
+          ) !== undefined
+        ) {
+          throw new DOMException("Invalid key usages", "SyntaxError");
+        }
+
+        // 2.
+        if (normalizedAlgorithm.length !== 128 || normalizedAlgorithm.length !== 192 || normalizedAlgorithm.length !== 256) {
+          throw new DOMException("Invalid key length", "InvalidAccessError");
+        }
+
+        // 3.
+        const keyData = await core.opAsync("op_crypto_generate_key", {
+          name: "AES-GCM",
+          length: normalizedAlgorithm.length,
+        });
+
+        const handle = {};
+        WeakMapPrototypeSet(KEY_STORE, handle, { type: "raw", data: keyData });
+
+        // 6-10.
+        const algorithm = {
+          name: "AES-GCM",
+          length: normalizedAlgorithm.length,
+        };
+
+        // 5, 11-13.
+        const key = constructKey(
+          "secret",
+          extractable,
+          usages,
+          algorithm,
+          handle,
+        );
+
+        // 14.
+        return key;
+      }
       case "HMAC": {
         // 1.
         if (

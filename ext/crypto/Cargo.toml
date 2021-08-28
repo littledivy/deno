@@ -21,6 +21,7 @@ num-traits = "0.2.14"
 rand = "0.8.4"
 ring = { version = "0.16.20", features = ["std"] }
 rsa = { version = "0.5.0", default-features = false, features = ["std"] }
+aes-gcm = "0.9.4"
 serde = { version = "1.0.126", features = ["derive"] }
 sha-1 = "0.9.7"
 sha2 = "0.9.5"

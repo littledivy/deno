@@ -211,6 +211,18 @@ pub async fn op_crypto_generate_key(
 
       key_bytes.to_vec()
     }
+    Algorithm::AesGcm => {
+      let length = args.length.ok_or_else(not_supported)?;
+
+      let rng = RingRand::SystemRandom::new();
+      const MAX_KEY_SIZE = 256 / 8;
+      let mut key_bytes = [0; MAX_KEY_SIZE];
+      let key_bytes = &mut key_bytes[..length];
+      rng.fill(key_bytes).map_err(|_| {
+        custom_error("DOMExceptionOperationError", "Key generation failed")
+      })?;
+      key_bytes.to_vec()
+    }
     _ => return Err(not_supported()),
   };
 
@@ -623,6 +635,9 @@ pub async fn op_crypto_encrypt_key(
           })?
           .into(),
       )
+    }
+    Algorithm::AesGcm => {
+      
     }
     _ => Err(type_error("Unsupported algorithm".to_string())),
   }

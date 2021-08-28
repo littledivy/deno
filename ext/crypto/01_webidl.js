@@ -133,8 +133,20 @@
 
   webidl.converters.HmacKeyGenParams = webidl
     .createDictionaryConverter("HmacKeyGenParams", dictHmacKeyGenParams);
-
-  const dictRsaPssParams = [
+  
+  const dictAesKeyGenParams = [
+      ...dictAlgorithm,
+      {
+        key: "length",
+        converter: (V, opts) =>
+          webidl.converters["unsigned long"](V, { ...opts, enforceRange: true }),
+      },
+  ];
+  
+  webidl.converters.AesKeyGenParams = webidl
+    .createDictionaryConverter("AesKeyGenParams", dictAesKeyGenParams);
+  
+    const dictRsaPssParams = [
     ...dictAlgorithm,
     {
       key: "saltLength",
