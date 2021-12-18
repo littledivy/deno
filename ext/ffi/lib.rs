@@ -152,6 +152,7 @@ enum NativeType {
   F32,
   F64,
   Pointer,
+  Function,
 }
 
 impl From<NativeType> for libffi::middle::Type {
@@ -170,7 +171,7 @@ impl From<NativeType> for libffi::middle::Type {
       NativeType::ISize => libffi::middle::Type::isize(),
       NativeType::F32 => libffi::middle::Type::f32(),
       NativeType::F64 => libffi::middle::Type::f64(),
-      NativeType::Pointer => libffi::middle::Type::pointer(),
+      NativeType::Pointer | NativeType::Function => libffi::middle::Type::pointer(),
     }
   }
 }
@@ -191,6 +192,7 @@ union NativeValue {
   f32_value: f32,
   f64_value: f64,
   pointer: *const u8,
+  function: *const c_void,
 }
 
 impl NativeValue {
@@ -247,6 +249,20 @@ impl NativeValue {
           }
         }
       }
+      NativeType::Function => {
+        if value.is_null() {
+          Self {
+            function: ptr::null(),
+          }
+        } else {
+          Self {
+            function: u64::from(
+              serde_json::from_value::<U32x2>(value)
+              .expect("Expected ffi arg value to be a tuple of the low and high bits of a pointer address")
+            ) as *mut c_void,
+          }
+        }
+      }
     }
   }
 
@@ -270,6 +286,7 @@ impl NativeValue {
       NativeType::F32 => Arg::new(&self.f32_value),
       NativeType::F64 => Arg::new(&self.f64_value),
       NativeType::Pointer => Arg::new(&self.pointer),
+      NativeType::Function => Arg::new(&self.function),
     }
   }
 }
