@@ -49,6 +49,8 @@ opt-level = 3
 # NB: the `bench` and `release` profiles must remain EXACTLY the same.
 [profile.bench.package.rand]
 opt-level = 3
+[profile.bench.package.indexmap]
+opt-level = 3
 [profile.bench.package.flate2]
 opt-level = 3
 [profile.bench.package.brotli]
@@ -96,6 +98,8 @@ opt-level = 3
 
 # NB: the `bench` and `release` profiles must remain EXACTLY the same.
 [profile.release.package.rand]
+opt-level = 3
+[profile.release.package.indexmap]
 opt-level = 3
 [profile.release.package.flate2]
 opt-level = 3

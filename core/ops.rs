@@ -23,6 +23,7 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::Context;
 use std::task::Poll;
+use std::collections::HashMap;
 
 /// Wrapper around a Future, which causes that Future to be polled immediately.
 /// (Background: ops are stored in a `FuturesUnordered` structure which polls
@@ -193,22 +194,22 @@ impl DerefMut for OpState {
 
 /// Collection for storing registered ops. The special 'get_op_catalog'
 /// op with OpId `0` is automatically added when the OpTable is created.
-pub struct OpTable(IndexMap<String, Rc<OpFn>>);
+pub struct OpTable(Vec<(String, Rc<OpFn>)>);
 
 impl OpTable {
   pub fn register_op<F>(&mut self, name: &str, op_fn: F) -> OpId
   where
     F: Fn(Rc<RefCell<OpState>>, OpPayload) -> Op + 'static,
   {
-    let (op_id, prev) = self.0.insert_full(name.to_owned(), Rc::new(op_fn));
-    assert!(prev.is_none());
-    op_id
+    self.0.push((name.to_owned(), Rc::new(op_fn)));
+    self.0.len() - 1
   }
 
   pub fn op_entries(state: Rc<RefCell<OpState>>) -> Vec<(String, OpId)> {
-    state.borrow().op_table.0.keys().cloned().zip(0..).collect()
+    state.borrow().op_table.0.iter().cloned().map(|(_, name)| name).zip(0..).collect()
   }
 
+  #[inline]
   pub fn route_op(
     op_id: OpId,
     state: Rc<RefCell<OpState>>,
@@ -218,7 +219,7 @@ impl OpTable {
       .borrow()
       .op_table
       .0
-      .get_index(op_id)
+      .get(op_id)
       .map(|(_, op_fn)| op_fn.clone());
     match op_fn {
       Some(f) => (f)(state, payload),
