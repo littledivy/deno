@@ -16,6 +16,7 @@ use indexmap::IndexMap;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::iter::once;
 use std::ops::Deref;
 use std::ops::DerefMut;
@@ -23,7 +24,6 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::Context;
 use std::task::Poll;
-use std::collections::HashMap;
 
 /// Wrapper around a Future, which causes that Future to be polled immediately.
 /// (Background: ops are stored in a `FuturesUnordered` structure which polls
@@ -194,19 +194,30 @@ impl DerefMut for OpState {
 
 /// Collection for storing registered ops. The special 'get_op_catalog'
 /// op with OpId `0` is automatically added when the OpTable is created.
-pub struct OpTable(Vec<(String, Rc<OpFn>)>);
+pub struct OpTable {
+  ops: Vec<Rc<OpFn>>,
+  op_names: Vec<String>,
+}
 
 impl OpTable {
   pub fn register_op<F>(&mut self, name: &str, op_fn: F) -> OpId
   where
     F: Fn(Rc<RefCell<OpState>>, OpPayload) -> Op + 'static,
   {
-    self.0.push((name.to_owned(), Rc::new(op_fn)));
-    self.0.len() - 1
+    self.ops.push(Rc::new(op_fn));
+    self.op_names.push(name.to_owned());
+    self.ops.len() - 1
   }
 
   pub fn op_entries(state: Rc<RefCell<OpState>>) -> Vec<(String, OpId)> {
-    state.borrow().op_table.0.iter().cloned().map(|(_, name)| name).zip(0..).collect()
+    state
+      .borrow()
+      .op_table
+      .op_names
+      .iter()
+      .cloned()
+      .zip(0..)
+      .collect()
   }
 
   #[inline]
@@ -215,16 +226,8 @@ impl OpTable {
     state: Rc<RefCell<OpState>>,
     payload: OpPayload,
   ) -> Op {
-    let op_fn = state
-      .borrow()
-      .op_table
-      .0
-      .get(op_id)
-      .map(|(_, op_fn)| op_fn.clone());
-    match op_fn {
-      Some(f) => (f)(state, payload),
-      None => Op::NotFound,
-    }
+    let op_fn = unsafe { state.borrow().op_table.ops.get_unchecked(op_id).clone() };
+    (op_fn)(state, payload)   
   }
 }
 
@@ -233,7 +236,10 @@ impl Default for OpTable {
     fn dummy(_state: Rc<RefCell<OpState>>, _p: OpPayload) -> Op {
       unreachable!()
     }
-    Self(once(("ops".to_owned(), Rc::new(dummy) as _)).collect())
+    Self {
+      ops: vec![Rc::new(dummy) as _],
+      op_names: vec!["ops".to_owned()],
+    }
   }
 }
 
