@@ -1,0 +1,19 @@
+[package]
+name = "android_hello_world"
+version = "0.0.0"
+description = "deno_core android example"
+authors = ["the Deno authors"]
+license = "MIT"
+edition = "2021"
+repository = "https://github.com/denoland/deno"
+publish = false
+
+[[bin]]
+path = "main.rs"
+name = "android_hello_world"
+# crate-type = ["cdylib"]
+
+[dependencies]
+deno_core = { path = "../../" }
+# ndk = "0.3.0"
+# ndk-glue = { version = "0.5.0", features = ["logger"] }

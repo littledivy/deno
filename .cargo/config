@@ -3,3 +3,9 @@ rustflags = ["-C", "target-feature=+crt-static"]
 
 [target.aarch64-apple-darwin]
 rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+# yes | ./cmdline-tools/bin/sdkmanager --licenses
+# ./cmdline-tools/bin/sdkmanager --install "ndk;22.1.7171670" --channel=3
+# ./cmdline-tools/bin/sdkmanager --install "build-tools;21.1.2" --channel=3
+[target.aarch64-linux-android]
+linker = "/Users/divy/android/ndk/22.1.7171670/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang++"

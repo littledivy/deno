@@ -6,6 +6,7 @@ members = [
   "bench_util",
   "cli",
   "core",
+  "core/examples/android",
   "runtime",
   "serde_v8",
   "test_ffi",
