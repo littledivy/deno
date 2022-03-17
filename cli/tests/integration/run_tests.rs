@@ -1628,6 +1628,12 @@ itest!(shebang_with_json_imports_swc {
   exit_code: 1,
 });
 
+itest!(dynamic_import_no_prompt {
+  args: "run dynamic_import_no_prompt.ts",
+  output: "dynamic_import_no_prompt.ts.out",
+  exit_code: 0,
+})
+
 #[test]
 fn no_validate_asm() {
   let output = util::deno_cmd()

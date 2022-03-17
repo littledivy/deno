@@ -91,9 +91,8 @@ impl ModuleLoader for CliModuleLoader {
     let ps = self.ps.clone();
     let state = op_state.borrow();
 
-    let dynamic_permissions = state.borrow::<Permissions>().clone();
     let root_permissions = if is_dynamic {
-      dynamic_permissions.clone()
+      Permissions::allow_all()
     } else {
       self.root_permissions.clone()
     };
@@ -112,7 +111,7 @@ impl ModuleLoader for CliModuleLoader {
         is_dynamic,
         lib,
         root_permissions,
-        dynamic_permissions,
+        Permissions::allow_all(),
         false,
       )
       .await
