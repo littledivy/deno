@@ -28,7 +28,7 @@ pub type StartTime = Instant;
 // If the High precision flag is not set, the
 // nanoseconds are rounded on 2ms.
 #[op]
-pub fn op_now<TP>(state: &mut OpState, _argument: ()) -> Result<f64, AnyError>
+pub fn op_now<TP>(state: &mut OpState) -> Result<f64, AnyError>
 where
   TP: TimersPermission + 'static,
 {

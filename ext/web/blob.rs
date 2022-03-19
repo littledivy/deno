@@ -5,7 +5,7 @@ use deno_core::op;
 use deno_core::parking_lot::Mutex;
 use deno_core::url::Url;
 use deno_core::ZeroCopyBuf;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -170,25 +170,17 @@ pub fn op_blob_create_part(
   Ok(id)
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SliceOptions {
-  start: usize,
-  len: usize,
-}
-
 #[op]
 pub fn op_blob_slice_part(
   state: &mut deno_core::OpState,
   id: Uuid,
-  options: SliceOptions,
+  start: usize,
+  len: usize,
 ) -> Result<Uuid, AnyError> {
   let blob_store = state.borrow::<BlobStore>();
   let part = blob_store
     .get_part(&id)
     .ok_or_else(|| type_error("Blob part not found"))?;
-
-  let SliceOptions { start, len } = options;
 
   let size = part.size();
   if start + len > size {
