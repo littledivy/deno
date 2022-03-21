@@ -352,7 +352,11 @@ impl JsRuntime {
     let loader = options
       .module_loader
       .unwrap_or_else(|| Rc::new(NoopModuleLoader));
-    op_state.borrow_mut().put(&mut *isolate as *mut v8::Isolate);
+    {
+      let mut op_state = op_state.borrow_mut();
+      op_state.put(&mut *isolate as *mut v8::Isolate);
+      op_state.put(Some(global_context.clone()));
+    }
     isolate.set_slot(Rc::new(RefCell::new(JsRuntimeState {
       global_context: Some(global_context),
       pending_promise_exceptions: HashMap::new(),
@@ -655,7 +659,14 @@ impl JsRuntime {
     state.borrow_mut().global_context.take();
 
     self.inspector.take();
-
+    // Drop other v8::Global handles before snapshotting
+    std::mem::take(&mut state.borrow_mut().js_recv_cb);
+    std::mem::take(&mut self.extensions);
+    {
+      let state = state.borrow();
+      let mut op_state = state.op_state.borrow_mut();
+      op_state.take::<Option<v8::Global<v8::Context>>>();
+    }
     // Overwrite existing ModuleMap to drop v8::Global handles
     self
       .v8_isolate()
@@ -829,10 +840,12 @@ impl JsRuntime {
     // Event loop middlewares
     let mut maybe_scheduling = false;
     {
-      let state = state_rc.borrow();
-      let op_state = state.op_state.clone();
+      let op_state = {
+        let state = state_rc.borrow();
+        state.op_state.clone()
+      };
       for f in &self.event_loop_middlewares {
-        if f(&mut op_state.borrow_mut(), cx) {
+        if f(op_state.clone(), cx) {
           maybe_scheduling = true;
         }
       }

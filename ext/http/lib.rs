@@ -91,31 +91,58 @@ pub fn init() -> Extension {
       state.put(task_recv);
       Ok(())
     })
-    .event_loop_middleware(|op_state, cx| {
+    .event_loop_middleware(|op_state_rc, cx| {
       let mut maybe_scheduling = false;
-      let recv = op_state.borrow_mut::<TokioMpsc::UnboundedReceiver<Task>>();
+      let mut tasks = vec![];
+      {
+        let mut op_state = op_state_rc.borrow_mut();
+        let recv = op_state.borrow_mut::<TokioMpsc::UnboundedReceiver<Task>>();
 
-      while let Poll::Ready(Some(callback)) = recv.poll_recv(cx) {
-        maybe_scheduling = true;
-        if let Ok(cb) = callback.try_lock() {
-          cb();
+        while let Poll::Ready(Some(callback)) = recv.poll_recv(cx) {
+          maybe_scheduling = true;
+          tasks.push(callback);
         }
+      }
+      while let Some(cb) = tasks.pop() {
+        cb();
       }
       maybe_scheduling
     })
     .build()
 }
 
-type Task = Arc<Mutex<Box<dyn Fn()>>>;
+type Task = Box<dyn Fn()>;
 
 async fn handle(
   request: Request<Body>,
   data: HandleData,
 ) -> Result<Response<Body>, std::convert::Infallible> {
   let (tx, mut rx) = TokioMpsc::unbounded_channel();
-  data.task_sender.send(Arc::new(Mutex::new(Box::new(move || {
+  let data_cloned = data.clone();
+
+  data.task_sender.send(Box::new(move || {
+    let HandleData {
+      isolate,
+      callback,
+      global_context,
+      ..
+    } = data_cloned.clone();
+    let scope = &mut v8::HandleScope::with_context(
+      unsafe { &mut *isolate },
+      global_context,
+    );
+    let local = callback.open(scope);
+    let recv = v8::undefined(scope);
+    local.call(scope, recv.into(), &[]);
+        
+    let method = request.method().to_string();
+    let headers = req_headers(&request);
+
+   let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 3000));
+    let url = req_url(&request, "http", &HttpSocketAddr::IpSocket(addr));
+
     tx.send(());
-  }))));
+  }));
   rx.recv().await;
   Ok(Response::new(Body::from("Hello World")))
 }
@@ -123,7 +150,8 @@ async fn handle(
 #[derive(Clone)]
 struct HandleData {
   isolate: *mut v8::Isolate,
-  callback: v8::Global<v8::Value>,
+  callback: v8::Global<v8::Function>,
+  global_context: v8::Global<v8::Context>,
   task_sender: TokioMpsc::UnboundedSender<Task>,
 }
 
@@ -135,20 +163,26 @@ async fn op_http_start_and_handle(
   state: Rc<RefCell<OpState>>,
   callback: serde_v8::Value<'_>,
 ) -> Result<(), AnyError> {
-  let (task_sender, isolate) = {
+  let (task_sender, isolate, global_context) = {
     let op_state = state.borrow();
     let isolate_ref = op_state.borrow::<*mut v8::Isolate>();
     let task_sender = op_state
       .borrow::<TokioMpsc::UnboundedSender<Task>>()
       .clone();
-    (task_sender, *isolate_ref)
+    let global_context = op_state
+      .borrow::<Option<v8::Global<v8::Context>>>()
+      .clone()
+      .unwrap();
+    (task_sender, *isolate_ref, global_context)
   };
-  let callback = v8::Global::new(unsafe { &mut *isolate }, callback.v8_value);
-
+  let func = v8::Local::<v8::Function>::try_from(callback.v8_value).unwrap();
+  let callback = v8::Global::new(unsafe { &mut *isolate }, func);
+  drop(state);
   let handle_data = HandleData {
     isolate,
     callback,
     task_sender,
+    global_context,
   };
   let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 3000));
   use hyper::service::make_service_fn;
