@@ -21,7 +21,10 @@ use deno_core::futures::StreamExt;
 use deno_core::futures::TryFutureExt;
 use deno_core::include_js_files;
 use deno_core::op;
+use std::sync::Mutex;
 
+use deno_core::serde_v8;
+use deno_core::v8;
 use deno_core::AsyncRefCell;
 use deno_core::ByteString;
 use deno_core::CancelFuture;
@@ -61,6 +64,7 @@ use std::task::Context;
 use std::task::Poll;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
+use tokio::sync::mpsc as TokioMpsc;
 use tokio::task::spawn_local;
 
 mod compressible;
@@ -72,6 +76,7 @@ pub fn init() -> Extension {
       "01_http.js",
     ))
     .ops(vec![
+      op_http_start_and_handle::decl(),
       op_http_accept::decl(),
       op_http_read::decl(),
       op_http_write_headers::decl(),
@@ -80,7 +85,96 @@ pub fn init() -> Extension {
       op_http_websocket_accept_header::decl(),
       op_http_upgrade_websocket::decl(),
     ])
+    .state(move |state| {
+      let (task_sender, task_recv) = TokioMpsc::unbounded_channel::<Task>();
+      state.put(task_sender.clone());
+      state.put(task_recv);
+      Ok(())
+    })
+    .event_loop_middleware(|op_state, cx| {
+      let mut maybe_scheduling = false;
+      let recv = op_state.borrow_mut::<TokioMpsc::UnboundedReceiver<Task>>();
+
+      while let Poll::Ready(Some(callback)) = recv.poll_recv(cx) {
+        maybe_scheduling = true;
+        if let Ok(cb) = callback.try_lock() {
+          cb();
+        }
+      }
+      maybe_scheduling
+    })
     .build()
+}
+
+type Task = Arc<Mutex<Box<dyn Fn()>>>;
+
+async fn handle(
+  request: Request<Body>,
+  data: HandleData,
+) -> Result<Response<Body>, std::convert::Infallible> {
+  let (tx, mut rx) = TokioMpsc::unbounded_channel();
+  data.task_sender.send(Arc::new(Mutex::new(Box::new(move || {
+    tx.send(());
+  }))));
+  rx.recv().await;
+  Ok(Response::new(Body::from("Hello World")))
+}
+
+#[derive(Clone)]
+struct HandleData {
+  isolate: *mut v8::Isolate,
+  callback: v8::Global<v8::Value>,
+  task_sender: TokioMpsc::UnboundedSender<Task>,
+}
+
+unsafe impl Send for HandleData {}
+unsafe impl Sync for HandleData {}
+
+#[op]
+async fn op_http_start_and_handle(
+  state: Rc<RefCell<OpState>>,
+  callback: serde_v8::Value<'_>,
+) -> Result<(), AnyError> {
+  let (task_sender, isolate) = {
+    let op_state = state.borrow();
+    let isolate_ref = op_state.borrow::<*mut v8::Isolate>();
+    let task_sender = op_state
+      .borrow::<TokioMpsc::UnboundedSender<Task>>()
+      .clone();
+    (task_sender, *isolate_ref)
+  };
+  let callback = v8::Global::new(unsafe { &mut *isolate }, callback.v8_value);
+
+  let handle_data = HandleData {
+    isolate,
+    callback,
+    task_sender,
+  };
+  let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 3000));
+  use hyper::service::make_service_fn;
+  use hyper::service::service_fn;
+  let make_service = make_service_fn(move |_conn| {
+    let handle_data = handle_data.clone();
+
+    async {
+      Ok::<_, std::convert::Infallible>(service_fn(move |req| {
+        handle(req, handle_data.clone())
+      }))
+    }
+  });
+
+  let server = hyper::Server::bind(&addr).serve(make_service);
+
+  if let Err(e) = server.await {
+    eprintln!("server error: {}", e);
+  }
+
+  Ok(())
+}
+
+pub struct NewService {
+  tx: mpsc::UnboundedSender<Request<Body>>,
+  rx: mpsc::UnboundedReceiver<Response<Body>>,
 }
 
 pub enum HttpSocketAddr {
