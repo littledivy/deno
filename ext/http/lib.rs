@@ -113,6 +113,19 @@ pub fn init() -> Extension {
 
 type Task = Box<dyn Fn()>;
 
+#[derive(Serialize)]
+struct HttpRequest {
+  method: String,
+  headers: Vec<(ByteString, ByteString)>,
+  url: String,
+}
+
+#[derive(Deserialize)]
+struct HttpResponse {
+  status: u16,
+  headers: Vec<(ByteString, ByteString)>,
+}
+
 async fn handle(
   request: Request<Body>,
   data: HandleData,
@@ -133,18 +146,32 @@ async fn handle(
     );
     let local = callback.open(scope);
     let recv = v8::undefined(scope);
-    local.call(scope, recv.into(), &[]);
-        
+
     let method = request.method().to_string();
     let headers = req_headers(&request);
-
-   let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 3000));
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 3000));
     let url = req_url(&request, "http", &HttpSocketAddr::IpSocket(addr));
 
-    tx.send(());
+    let request_value = serde_v8::to_v8(
+      scope,
+      HttpRequest {
+        method,
+        headers,
+        url,
+      },
+    )
+    .unwrap();
+    let response_value =
+      local.call(scope, recv.into(), &[request_value]).unwrap();
+    // TODO(@littledivy): Handle promise
+    let response: HttpResponse =
+      serde_v8::from_v8(scope, response_value).unwrap();
+
+    let mut builder = Response::new(Body::from("Hello, World"));
+    tx.send(builder);
   }));
-  rx.recv().await;
-  Ok(Response::new(Body::from("Hello World")))
+  let response = rx.recv().await.unwrap();
+  Ok(response)
 }
 
 #[derive(Clone)]
@@ -175,8 +202,10 @@ async fn op_http_start_and_handle(
       .unwrap();
     (task_sender, *isolate_ref, global_context)
   };
+  // Grab the persistent for the server handler.
   let func = v8::Local::<v8::Function>::try_from(callback.v8_value).unwrap();
   let callback = v8::Global::new(unsafe { &mut *isolate }, func);
+  // Drop state.
   drop(state);
   let handle_data = HandleData {
     isolate,
@@ -204,11 +233,6 @@ async fn op_http_start_and_handle(
   }
 
   Ok(())
-}
-
-pub struct NewService {
-  tx: mpsc::UnboundedSender<Request<Body>>,
-  rx: mpsc::UnboundedReceiver<Response<Body>>,
 }
 
 pub enum HttpSocketAddr {
