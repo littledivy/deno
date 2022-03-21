@@ -170,6 +170,41 @@
     }
   }
 
+  async function serve(callback) {
+    await Deno.core.opAsync(
+      "op_http_start_and_handle",
+      ({ url, rid, headers, method }) => {
+        /** @type {ReadableStream<Uint8Array> | undefined} */
+        let body = null;
+        // There might be a body, but we don't expose it for GET/HEAD requests.
+        // It will be closed automatically once the request has been handled and
+        // the response has been sent.
+        if (method !== "GET" && method !== "HEAD") {
+          body = createRequestBodyStream(rid);
+        }
+
+        const innerRequest = newInnerRequest(
+          method,
+          url,
+          headers,
+          body !== null ? new InnerBody(body) : null,
+          false,
+        );
+        const signal = abortSignal.newSignal();
+        const request = fromInnerRequest(innerRequest, signal, "immutable");
+
+        const respondWith = createRespondWith(
+          this,
+          rid,
+          request,
+          "127.0.0.1",
+          "localhost",
+        );
+
+        callback({ request, respondWith });
+      },
+    );
+  }
   function readRequest(streamRid, buf) {
     return core.opAsync("op_http_read", streamRid, buf);
   }
@@ -358,10 +393,10 @@
           }
         }
       } finally {
-        if (SetPrototypeHas(httpConn.managedResources, streamRid)) {
-          SetPrototypeDelete(httpConn.managedResources, streamRid);
-          core.close(streamRid);
-        }
+        // if (SetPrototypeHas(httpConn.managedResources, streamRid)) {
+        // SetPrototypeDelete(httpConn.managedResources, streamRid);
+        core.close(streamRid);
+        // }
       }
     };
   }
@@ -471,5 +506,6 @@
     HttpConn,
     upgradeWebSocket,
     upgradeHttp,
+    serve,
   };
 })(this);

@@ -3,12 +3,12 @@
 
 ((window) => {
   const core = window.__bootstrap.core;
-  const { HttpConn } = window.__bootstrap.http;
+  const { serve, HttpConn } = window.__bootstrap.http;
 
   function serveHttp(conn) {
     const rid = core.opSync("op_http_start", conn.rid);
     return new HttpConn(rid, conn.remoteAddr, conn.localAddr);
   }
 
-  window.__bootstrap.http.serveHttp = serveHttp;
+  window.__bootstrap.http.serveHttp = serve;
 })(globalThis);

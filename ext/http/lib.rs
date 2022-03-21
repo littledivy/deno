@@ -111,13 +111,14 @@ pub fn init() -> Extension {
     .build()
 }
 
-type Task = Box<dyn Fn()>;
+type Task = Box<dyn FnOnce()>;
 
 #[derive(Serialize)]
 struct HttpRequest {
   method: String,
   headers: Vec<(ByteString, ByteString)>,
   url: String,
+  rid: u32,
 }
 
 #[derive(Deserialize)]
@@ -129,10 +130,28 @@ struct HttpResponse {
 async fn handle(
   request: Request<Body>,
   data: HandleData,
+  op_state_rc: Rc<RefCell<OpState>>,
 ) -> Result<Response<Body>, std::convert::Infallible> {
-  let (tx, mut rx) = TokioMpsc::unbounded_channel();
+  let (tx, mut rx) = oneshot::channel();
   let data_cloned = data.clone();
+  let method = request.method().to_string();
+  let headers = req_headers(&request);
+  let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 3000));
 
+  let url = req_url(&request, "http", &HttpSocketAddr::IpSocket(addr));
+  let stream_rid = {
+    let mut op_state = op_state_rc.borrow_mut();
+    op_state
+      .resource_table
+      .add_rc(Rc::new(HttpStreamResourceNew::new(request, tx)))
+  };
+
+  let req = HttpRequest {
+    method,
+    headers,
+    url,
+    rid: stream_rid,
+  };
   data.task_sender.send(Box::new(move || {
     let HandleData {
       isolate,
@@ -146,31 +165,10 @@ async fn handle(
     );
     let local = callback.open(scope);
     let recv = v8::undefined(scope);
-
-    let method = request.method().to_string();
-    let headers = req_headers(&request);
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 3000));
-    let url = req_url(&request, "http", &HttpSocketAddr::IpSocket(addr));
-
-    let request_value = serde_v8::to_v8(
-      scope,
-      HttpRequest {
-        method,
-        headers,
-        url,
-      },
-    )
-    .unwrap();
-    let response_value =
-      local.call(scope, recv.into(), &[request_value]).unwrap();
-    // TODO(@littledivy): Handle promise
-    let response: HttpResponse =
-      serde_v8::from_v8(scope, response_value).unwrap();
-
-    let mut builder = Response::new(Body::from("Hello, World"));
-    tx.send(builder);
+    let request_value = serde_v8::to_v8(scope, req).unwrap();
+    local.call(scope, recv.into(), &[request_value]).unwrap();
   }));
-  let response = rx.recv().await.unwrap();
+  let response = rx.await.unwrap();
   Ok(response)
 }
 
@@ -206,7 +204,6 @@ async fn op_http_start_and_handle(
   let func = v8::Local::<v8::Function>::try_from(callback.v8_value).unwrap();
   let callback = v8::Global::new(unsafe { &mut *isolate }, func);
   // Drop state.
-  drop(state);
   let handle_data = HandleData {
     isolate,
     callback,
@@ -218,15 +215,17 @@ async fn op_http_start_and_handle(
   use hyper::service::service_fn;
   let make_service = make_service_fn(move |_conn| {
     let handle_data = handle_data.clone();
-
+    let state = state.clone();
     async {
       Ok::<_, std::convert::Infallible>(service_fn(move |req| {
-        handle(req, handle_data.clone())
+        handle(req, handle_data.clone(), state.clone())
       }))
     }
   });
 
-  let server = hyper::Server::bind(&addr).serve(make_service);
+  let server = hyper::Server::bind(&addr)
+    .executor(LocalExecutor)
+    .serve(make_service);
 
   if let Err(e) = server.await {
     eprintln!("server error: {}", e);
@@ -437,6 +436,37 @@ impl HttpAcceptor {
       .send(request)
       .map(|_| response_rx)
       .unwrap_or_else(|_| oneshot::channel().1) // Make new canceled receiver.
+  }
+}
+
+pub struct HttpStreamResourceNew {
+  pub rd: AsyncRefCell<HttpRequestReader>,
+  wr: AsyncRefCell<HttpResponseWriter>,
+  accept_encoding: RefCell<Encoding>,
+  cancel_handle: CancelHandle,
+}
+
+impl HttpStreamResourceNew {
+  fn new(
+    request: Request<Body>,
+    response_tx: oneshot::Sender<Response<Body>>,
+  ) -> Self {
+    Self {
+      rd: HttpRequestReader::Headers(request).into(),
+      wr: HttpResponseWriter::Headers(response_tx).into(),
+      accept_encoding: RefCell::new(Encoding::Identity),
+      cancel_handle: CancelHandle::new(),
+    }
+  }
+}
+
+impl Resource for HttpStreamResourceNew {
+  fn name(&self) -> Cow<str> {
+    "httpStream".into()
+  }
+
+  fn close(self: Rc<Self>) {
+    self.cancel_handle.cancel();
   }
 }
 
@@ -657,7 +687,7 @@ async fn op_http_write_headers(
   let stream = state
     .borrow_mut()
     .resource_table
-    .get::<HttpStreamResource>(rid)?;
+    .get::<HttpStreamResourceNew>(rid)?;
 
   let mut builder = Response::builder().status(status);
 
@@ -838,7 +868,7 @@ async fn op_http_write_headers(
   match response_tx.send(body) {
     Ok(_) => Ok(()),
     Err(_) => {
-      stream.conn.closed().await?;
+      // stream.conn.closed().await?;
       Err(http_error("connection closed while sending response"))
     }
   }
@@ -853,7 +883,7 @@ async fn op_http_write(
   let stream = state
     .borrow()
     .resource_table
-    .get::<HttpStreamResource>(rid)?;
+    .get::<HttpStreamResourceNew>(rid)?;
   let mut wr = RcRef::map(&stream, |r| &r.wr).borrow_mut().await;
 
   loop {
@@ -874,7 +904,7 @@ async fn op_http_write(
         // Don't return "channel closed", that's an implementation detail.
         // Pull up the failure associated with the transport connection instead.
         assert!(err.is_closed());
-        stream.conn.closed().await?;
+        // stream.conn.closed().await?;
         // If there was no connection error, drop body_tx.
         *wr = HttpResponseWriter::Closed;
       }
@@ -893,7 +923,7 @@ async fn op_http_shutdown(
   let stream = state
     .borrow()
     .resource_table
-    .get::<HttpStreamResource>(rid)?;
+    .get::<HttpStreamResourceNew>(rid)?;
   let mut wr = RcRef::map(&stream, |r| &r.wr).borrow_mut().await;
   take(&mut *wr);
   Ok(())
@@ -908,7 +938,7 @@ async fn op_http_read(
   let stream = state
     .borrow_mut()
     .resource_table
-    .get::<HttpStreamResource>(rid)?;
+    .get::<HttpStreamResourceNew>(rid)?;
   let mut rd = RcRef::map(&stream, |r| &r.rd).borrow_mut().await;
 
   let body = loop {
@@ -965,7 +995,7 @@ async fn op_http_upgrade_websocket(
   let stream = state
     .borrow_mut()
     .resource_table
-    .get::<HttpStreamResource>(rid)?;
+    .get::<HttpStreamResourceNew>(rid)?;
   let mut rd = RcRef::map(&stream, |r| &r.rd).borrow_mut().await;
 
   let request = match &mut *rd {
