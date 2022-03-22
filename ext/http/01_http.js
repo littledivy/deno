@@ -171,9 +171,12 @@
   }
 
   async function serve(callback) {
+    const managedResources = new Set();
     await Deno.core.opAsync(
       "op_http_start_and_handle",
-      ({ url, rid, headers, method }) => {
+      (nextRequest) => {
+        const [rid, method, headers, url] = nextRequest;
+        SetPrototypeAdd(managedResources, rid);
         /** @type {ReadableStream<Uint8Array> | undefined} */
         let body = null;
         // There might be a body, but we don't expose it for GET/HEAD requests.
@@ -194,7 +197,7 @@
         const request = fromInnerRequest(innerRequest, signal, "immutable");
 
         const respondWith = createRespondWith(
-          this,
+          { managedResources },
           rid,
           request,
           "127.0.0.1",
@@ -393,10 +396,10 @@
           }
         }
       } finally {
-        // if (SetPrototypeHas(httpConn.managedResources, streamRid)) {
-        // SetPrototypeDelete(httpConn.managedResources, streamRid);
-        core.close(streamRid);
-        // }
+        if (SetPrototypeHas(httpConn.managedResources, streamRid)) {
+          SetPrototypeDelete(httpConn.managedResources, streamRid);
+          core.close(streamRid);
+        }
       }
     };
   }

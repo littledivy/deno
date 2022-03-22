@@ -1,3 +1,3 @@
-await Deno.serveHttp(({ respondWith }) => {
+Deno.serveHttp(({ respondWith }) => {
   respondWith(new Response("Hello, World"));
 });
