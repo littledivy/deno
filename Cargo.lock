@@ -803,7 +803,7 @@ dependencies = [
  "text-size",
  "text_lines",
  "tokio",
- "tokio-util",
+ "tokio-util 0.6.9",
  "trust-dns-client",
  "trust-dns-server",
  "typed-arena",
@@ -941,7 +941,7 @@ dependencies = [
  "serde",
  "tokio",
  "tokio-stream",
- "tokio-util",
+ "tokio-util 0.6.9",
 ]
 
 [[package]]
@@ -995,7 +995,7 @@ dependencies = [
  "ring",
  "serde",
  "tokio",
- "tokio-util",
+ "tokio-util 0.7.0",
 ]
 
 [[package]]
@@ -1854,7 +1854,7 @@ dependencies = [
  "indexmap",
  "slab",
  "tokio",
- "tokio-util",
+ "tokio-util 0.6.9",
  "tracing",
 ]
 
@@ -2395,7 +2395,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
- "tokio-util",
+ "tokio-util 0.6.9",
  "tower-service",
  "twoway",
 ]
@@ -3354,7 +3354,7 @@ dependencies = [
  "serde_urlencoded",
  "tokio",
  "tokio-rustls",
- "tokio-util",
+ "tokio-util 0.6.9",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -4613,6 +4613,21 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "log",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
+name = "tokio-util"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64910e1b9c1901aaf5375561e35b9c057d95ff41a44ede043a03e09279eabaf1"
+dependencies = [
+ "bytes",
+ "futures-core",
+ "futures-sink",
+ "futures-util",
  "log",
  "pin-project-lite",
  "tokio",

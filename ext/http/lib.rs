@@ -62,6 +62,9 @@ use std::task::Poll;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::task::spawn_local;
+use tokio_util::task::LocalPoolHandle;
+use tokio::task::JoinHandle;
+use deno_core::futures::SinkExt;
 
 mod compressible;
 
@@ -105,9 +108,9 @@ impl From<tokio::net::unix::SocketAddr> for HttpSocketAddr {
 struct HttpConnResource {
   addr: HttpSocketAddr,
   scheme: &'static str,
-  acceptors_tx: mpsc::UnboundedSender<HttpAcceptor>,
-  closed_fut: Shared<RemoteHandle<Result<(), Arc<hyper::Error>>>>,
-  cancel_handle: Rc<CancelHandle>, // Closes gracefully and cancels accept ops.
+  request_rx: Rc<RefCell<tokio::sync::mpsc::UnboundedReceiver<HttpRequest>>>,
+  join_handle: Rc<RefCell<Option<JoinHandle<Result<(), Arc<hyper::Error>>>>>>,
+  cancel_handle_tx: tokio::sync::mpsc::UnboundedSender<()>, // Closes gracefully and cancels accept ops.
 }
 
 impl HttpConnResource {
@@ -115,43 +118,41 @@ impl HttpConnResource {
   where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
   {
-    let (acceptors_tx, acceptors_rx) = mpsc::unbounded::<HttpAcceptor>();
-    let service = HttpService::new(acceptors_rx);
-
-    let conn_fut = Http::new()
-      .with_executor(LocalExecutor)
-      .serve_connection(io, service)
-      .with_upgrades();
-
+    let (request_tx, request_rx) = tokio::sync::mpsc::unbounded_channel::<HttpRequest>();
+    let pool = LocalPoolHandle::new(1);
+    
     // When the cancel handle is used, the connection shuts down gracefully.
     // No new HTTP streams will be accepted, but existing streams will be able
     // to continue operating and eventually shut down cleanly.
-    let cancel_handle = CancelHandle::new_rc();
-    let shutdown_fut = never().or_cancel(&cancel_handle).fuse();
+    let (cancel_handle_tx, mut cancel_handle_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let join_handle = pool.spawn_pinned(move || {
+      let service = HttpService { request_tx };
 
-    // A local task that polls the hyper connection future to completion.
-    let task_fut = async move {
-      pin_mut!(shutdown_fut);
-      pin_mut!(conn_fut);
-      let result = match select(conn_fut, shutdown_fut).await {
-        Either::Left((result, _)) => result,
-        Either::Right((_, mut conn_fut)) => {
-          conn_fut.as_mut().graceful_shutdown();
-          conn_fut.await
-        }
-      };
-      filter_enotconn(result).map_err(Arc::from)
-    };
-    let (task_fut, closed_fut) = task_fut.remote_handle();
-    let closed_fut = closed_fut.shared();
-    spawn_local(task_fut);
-
+      let conn_fut = Http::new()
+        .with_executor(LocalExecutor)
+        .serve_connection(io, service)
+        .with_upgrades();
+      // A local task that polls the hyper connection future to completion.
+      async move {
+        let cancel_fut = cancel_handle_rx.recv();
+        pin_mut!(cancel_fut);
+        pin_mut!(conn_fut);
+        let result = match select(conn_fut, cancel_fut).await {
+          Either::Left((result, _)) => result,
+          Either::Right((_, mut conn_fut)) => {
+            conn_fut.as_mut().graceful_shutdown();
+            conn_fut.await
+          }
+        };
+        filter_enotconn(result).map_err(Arc::from)
+      }
+    });
     Self {
       addr,
       scheme,
-      acceptors_tx,
-      closed_fut,
-      cancel_handle,
+      request_rx: Rc::new(RefCell::new(request_rx)),
+      join_handle: Rc::new(RefCell::new(Some(join_handle))),
+      cancel_handle_tx,
     }
   }
 
@@ -160,13 +161,10 @@ impl HttpConnResource {
     self: &Rc<Self>,
   ) -> Result<Option<HttpStreamResource>, AnyError> {
     let fut = async {
-      let (request_tx, request_rx) = oneshot::channel();
-      let (response_tx, response_rx) = oneshot::channel();
-
-      let acceptor = HttpAcceptor::new(request_tx, response_rx);
-      self.acceptors_tx.unbounded_send(acceptor).ok()?;
-
-      let request = request_rx.await.ok()?;
+      let mut request_rx = self.request_rx.borrow_mut();
+      let request_fut = request_rx.recv();
+      pin_mut!(request_fut);
+      let HttpRequest { request, response_tx } = request_fut.await?;
       let stream = HttpStreamResource::new(self, request, response_tx);
       Some(stream)
     };
@@ -178,13 +176,13 @@ impl HttpConnResource {
         None => self.closed().map_ok(|_| None).await,
       }
     }
-    .try_or_cancel(&self.cancel_handle)
     .await
   }
 
   /// A future that completes when this HTTP connection is closed or errors.
   async fn closed(&self) -> Result<(), AnyError> {
-    self.closed_fut.clone().map_err(AnyError::from).await
+    let fut = self.join_handle.take().unwrap();
+    fut.await.unwrap().map_err(AnyError::from)
   }
 
   fn scheme(&self) -> &'static str {
@@ -200,9 +198,9 @@ impl Resource for HttpConnResource {
   fn name(&self) -> Cow<str> {
     "httpConn".into()
   }
-
+    
   fn close(self: Rc<Self>) {
-    self.cancel_handle.cancel();
+    self.cancel_handle_tx.send(());
   }
 }
 
@@ -222,17 +220,15 @@ where
   Ok(rid)
 }
 
+struct HttpRequest {
+  response_tx: oneshot::Sender<Response<Body>>,
+  request: Request<Body>, 
+}
+
 /// An object that implements the `hyper::Service` trait, through which Hyper
 /// delivers incoming HTTP requests.
 struct HttpService {
-  acceptors_rx: Peekable<mpsc::UnboundedReceiver<HttpAcceptor>>,
-}
-
-impl HttpService {
-  fn new(acceptors_rx: mpsc::UnboundedReceiver<HttpAcceptor>) -> Self {
-    let acceptors_rx = acceptors_rx.peekable();
-    Self { acceptors_rx }
-  }
+  request_tx: tokio::sync::mpsc::UnboundedSender<HttpRequest>,
 }
 
 impl Service<Request<Body>> for HttpService {
@@ -244,45 +240,13 @@ impl Service<Request<Body>> for HttpService {
     &mut self,
     cx: &mut Context<'_>,
   ) -> Poll<Result<(), Self::Error>> {
-    let acceptors_rx = Pin::new(&mut self.acceptors_rx);
-    let result = ready!(acceptors_rx.poll_peek(cx))
-      .map(|_| ())
-      .ok_or(oneshot::Canceled);
-    Poll::Ready(result)
+    Poll::Ready(Ok(()))
   }
 
   fn call(&mut self, request: Request<Body>) -> Self::Future {
-    let acceptor = self.acceptors_rx.next().now_or_never().flatten().unwrap();
-    acceptor.call(request)
-  }
-}
-
-/// A pair of one-shot channels which first transfer a HTTP request from the
-/// Hyper service to the HttpConn resource, and then take the Response back to
-/// the service.
-struct HttpAcceptor {
-  request_tx: oneshot::Sender<Request<Body>>,
-  response_rx: oneshot::Receiver<Response<Body>>,
-}
-
-impl HttpAcceptor {
-  fn new(
-    request_tx: oneshot::Sender<Request<Body>>,
-    response_rx: oneshot::Receiver<Response<Body>>,
-  ) -> Self {
-    Self {
-      request_tx,
-      response_rx,
-    }
-  }
-
-  fn call(self, request: Request<Body>) -> oneshot::Receiver<Response<Body>> {
-    let Self {
-      request_tx,
-      response_rx,
-    } = self;
-    request_tx
-      .send(request)
+    let (response_tx, response_rx) = oneshot::channel();
+    self.request_tx
+      .send(HttpRequest { request, response_tx })
       .map(|_| response_rx)
       .unwrap_or_else(|_| oneshot::channel().1) // Make new canceled receiver.
   }
