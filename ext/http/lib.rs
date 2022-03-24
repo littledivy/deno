@@ -14,7 +14,6 @@ use deno_core::futures::future::RemoteHandle;
 use deno_core::futures::future::Shared;
 use deno_core::futures::never::Never;
 use deno_core::futures::pin_mut;
-use deno_core::futures::ready;
 use deno_core::futures::stream::Peekable;
 use deno_core::futures::FutureExt;
 use deno_core::futures::StreamExt;
@@ -62,9 +61,6 @@ use std::task::Poll;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::task::spawn_local;
-use tokio_util::task::LocalPoolHandle;
-use tokio::task::JoinHandle;
-use deno_core::futures::SinkExt;
 
 mod compressible;
 
@@ -109,8 +105,8 @@ struct HttpConnResource {
   addr: HttpSocketAddr,
   scheme: &'static str,
   request_rx: Rc<RefCell<tokio::sync::mpsc::UnboundedReceiver<HttpRequest>>>,
-  join_handle: Rc<RefCell<Option<JoinHandle<Result<(), Arc<hyper::Error>>>>>>,
-  cancel_handle_tx: tokio::sync::mpsc::UnboundedSender<()>, // Closes gracefully and cancels accept ops.
+  closed_fut: Shared<RemoteHandle<Result<(), Arc<hyper::Error>>>>,
+  cancel_handle: Rc<CancelHandle>, // Closes gracefully and cancels accept ops.
 }
 
 impl HttpConnResource {
@@ -119,51 +115,51 @@ impl HttpConnResource {
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
   {
     let (request_tx, request_rx) = tokio::sync::mpsc::unbounded_channel::<HttpRequest>();
-    let pool = LocalPoolHandle::new(1);
-    
+    let service = HttpService { request_tx };
+    let conn_fut = Http::new()
+      .with_executor(LocalExecutor)
+      .serve_connection(io, service)
+      .with_upgrades();
+
     // When the cancel handle is used, the connection shuts down gracefully.
     // No new HTTP streams will be accepted, but existing streams will be able
     // to continue operating and eventually shut down cleanly.
-    let (cancel_handle_tx, mut cancel_handle_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
-    let join_handle = pool.spawn_pinned(move || {
-      let service = HttpService { request_tx };
+    let cancel_handle = CancelHandle::new_rc();
+    let shutdown_fut = never().or_cancel(&cancel_handle).fuse();
 
-      let conn_fut = Http::new()
-        .with_executor(LocalExecutor)
-        .serve_connection(io, service)
-        .with_upgrades();
-      // A local task that polls the hyper connection future to completion.
-      async move {
-        let cancel_fut = cancel_handle_rx.recv();
-        pin_mut!(cancel_fut);
-        pin_mut!(conn_fut);
-        let result = match select(conn_fut, cancel_fut).await {
-          Either::Left((result, _)) => result,
-          Either::Right((_, mut conn_fut)) => {
-            conn_fut.as_mut().graceful_shutdown();
-            conn_fut.await
-          }
-        };
-        filter_enotconn(result).map_err(Arc::from)
-      }
-    });
+    // A local task that polls the hyper connection future to completion.
+    let task_fut = async move {
+      pin_mut!(shutdown_fut);
+      pin_mut!(conn_fut);
+      let result = match select(conn_fut, shutdown_fut).await {
+        Either::Left((result, _)) => result,
+        Either::Right((_, mut conn_fut)) => {
+          conn_fut.as_mut().graceful_shutdown();
+          conn_fut.await
+        }
+      };
+      filter_enotconn(result).map_err(Arc::from)
+    };
+    let (task_fut, closed_fut) = task_fut.remote_handle();
+    let closed_fut = closed_fut.shared();
+    spawn_local(task_fut);    
+
     Self {
       addr,
       scheme,
       request_rx: Rc::new(RefCell::new(request_rx)),
-      join_handle: Rc::new(RefCell::new(Some(join_handle))),
-      cancel_handle_tx,
+      closed_fut,
+      cancel_handle, 
     }
   }
 
   // Accepts a new incoming HTTP request.
   async fn accept(
     self: &Rc<Self>,
-  ) -> Result<Option<HttpStreamResource>, AnyError> {
+  ) -> Result<Option<Vec<HttpStreamResource>>, AnyError> {
     let fut = async {
       let mut request_rx = self.request_rx.borrow_mut();
       let request_fut = request_rx.recv();
-      pin_mut!(request_fut);
       let HttpRequest { request, response_tx } = request_fut.await?;
       let stream = HttpStreamResource::new(self, request, response_tx);
       Some(stream)
@@ -176,13 +172,13 @@ impl HttpConnResource {
         None => self.closed().map_ok(|_| None).await,
       }
     }
+    .try_or_cancel(&self.cancel_handle)
     .await
   }
 
   /// A future that completes when this HTTP connection is closed or errors.
   async fn closed(&self) -> Result<(), AnyError> {
-    let fut = self.join_handle.take().unwrap();
-    fut.await.unwrap().map_err(AnyError::from)
+    self.closed_fut.clone().map_err(AnyError::from).await
   }
 
   fn scheme(&self) -> &'static str {
@@ -200,7 +196,7 @@ impl Resource for HttpConnResource {
   }
     
   fn close(self: Rc<Self>) {
-    self.cancel_handle_tx.send(());
+    self.cancel_handle.cancel();
   }
 }
 
