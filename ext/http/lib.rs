@@ -114,7 +114,8 @@ impl HttpConnResource {
   where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
   {
-    let (request_tx, request_rx) = tokio::sync::mpsc::unbounded_channel::<HttpRequest>();
+    let (request_tx, request_rx) =
+      tokio::sync::mpsc::unbounded_channel::<HttpRequest>();
     let service = HttpService { request_tx };
     let conn_fut = Http::new()
       .with_executor(LocalExecutor)
@@ -142,38 +143,36 @@ impl HttpConnResource {
     };
     let (task_fut, closed_fut) = task_fut.remote_handle();
     let closed_fut = closed_fut.shared();
-    spawn_local(task_fut);    
+    spawn_local(task_fut);
 
     Self {
       addr,
       scheme,
       request_rx: Rc::new(RefCell::new(request_rx)),
       closed_fut,
-      cancel_handle, 
+      cancel_handle,
     }
   }
 
   // Accepts a new incoming HTTP request.
   async fn accept(
     self: &Rc<Self>,
-  ) -> Result<Option<Vec<HttpStreamResource>>, AnyError> {
-    let fut = async {
-      let mut request_rx = self.request_rx.borrow_mut();
-      let request_fut = request_rx.recv();
-      let HttpRequest { request, response_tx } = request_fut.await?;
-      let stream = HttpStreamResource::new(self, request, response_tx);
-      Some(stream)
-    };
-
-    async {
-      match fut.await {
-        Some(stream) => Ok(Some(stream)),
-        // Return the connection error, if any.
-        None => self.closed().map_ok(|_| None).await,
+  ) -> Result<Option<HttpStreamResource>, AnyError> {
+    let mut request_rx = self.request_rx.borrow_mut();
+    match request_rx.try_recv() {
+      Ok(HttpRequest {
+        request,
+        response_tx,
+      }) => Ok(Some(HttpStreamResource::new(self, request, response_tx))),
+      Err(tokio::sync::mpsc::error::TryRecvError::Empty) => Ok(None),
+      Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+        self
+          .closed()
+          .map_ok(|_| None)
+          .try_or_cancel(&self.cancel_handle)
+          .await
       }
     }
-    .try_or_cancel(&self.cancel_handle)
-    .await
   }
 
   /// A future that completes when this HTTP connection is closed or errors.
@@ -194,7 +193,7 @@ impl Resource for HttpConnResource {
   fn name(&self) -> Cow<str> {
     "httpConn".into()
   }
-    
+
   fn close(self: Rc<Self>) {
     self.cancel_handle.cancel();
   }
@@ -218,7 +217,7 @@ where
 
 struct HttpRequest {
   response_tx: oneshot::Sender<Response<Body>>,
-  request: Request<Body>, 
+  request: Request<Body>,
 }
 
 /// An object that implements the `hyper::Service` trait, through which Hyper
@@ -241,8 +240,12 @@ impl Service<Request<Body>> for HttpService {
 
   fn call(&mut self, request: Request<Body>) -> Self::Future {
     let (response_tx, response_rx) = oneshot::channel();
-    self.request_tx
-      .send(HttpRequest { request, response_tx })
+    self
+      .request_tx
+      .send(HttpRequest {
+        request,
+        response_tx,
+      })
       .map(|_| response_rx)
       .unwrap_or_else(|_| oneshot::channel().1) // Make new canceled receiver.
   }

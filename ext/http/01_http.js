@@ -85,7 +85,9 @@
     async nextRequest() {
       let nextRequest;
       try {
-        nextRequest = await core.opAsync("op_http_accept", this.#rid);
+        while (nextRequest == null) {
+          nextRequest = await core.opAsync("op_http_accept", this.#rid);
+        }
       } catch (error) {
         this.close();
         // A connection error seen here would cause disrupted responses to throw
