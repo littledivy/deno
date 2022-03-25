@@ -2,6 +2,8 @@
 
 pub mod fs;
 pub mod fs_events;
+#[cfg(unix)]
+mod fs_unix;
 pub mod http;
 pub mod io;
 pub mod os;

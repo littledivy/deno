@@ -28,7 +28,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::process;
 
 #[cfg(unix)]
-use std::os::unix::io::FromRawFd;
+use {std::os::unix::io::AsRawFd, std::os::unix::io::FromRawFd};
 
 #[cfg(windows)]
 use {
@@ -227,8 +227,14 @@ impl Resource for ChildStderrResource {
 
 #[derive(Debug, Default)]
 pub struct StdFileResource {
-  pub fs_file:
-    Option<AsyncRefCell<(Option<tokio::fs::File>, Option<FileMetadata>)>>,
+  pub fs_file: Option<
+    AsyncRefCell<(
+      Option<tokio::fs::File>,
+      Option<FileMetadata>,
+      //#[cfg(unix)]
+      Option<super::fs_unix::AsyncFile>,
+    )>,
+  >,
   cancel: CancelHandle,
   name: String,
 }
@@ -239,6 +245,8 @@ impl StdFileResource {
       fs_file: Some(AsyncRefCell::new((
         std_file.try_clone().map(tokio::fs::File::from_std).ok(),
         Some(FileMetadata::default()),
+        #[cfg(unix)]
+        None,
       ))),
       name: name.to_string(),
       ..Default::default()
@@ -246,10 +254,14 @@ impl StdFileResource {
   }
 
   pub fn fs_file(fs_file: tokio::fs::File) -> Self {
+    #[cfg(unix)]
+    let fd = fs_file.as_raw_fd();
     Self {
       fs_file: Some(AsyncRefCell::new((
         Some(fs_file),
         Some(FileMetadata::default()),
+        #[cfg(unix)]
+        super::fs_unix::AsyncFile::from_file(fd).ok(),
       ))),
       name: "fsFile".to_string(),
       ..Default::default()
@@ -264,7 +276,13 @@ impl StdFileResource {
       let mut fs_file = RcRef::map(&self, |r| r.fs_file.as_ref().unwrap())
         .borrow_mut()
         .await;
+      #[cfg(not(unix))]
       let nwritten = fs_file.0.as_mut().unwrap().read(&mut buf).await?;
+      #[cfg(unix)]
+      let nwritten = match fs_file.2.as_mut() {
+        Some(fs_file) => fs_file.read(&mut buf).await?,
+        None => fs_file.0.as_mut().unwrap().read(&mut buf).await?,
+      };
       Ok(nwritten)
     } else {
       Err(resource_unavailable())
@@ -276,8 +294,27 @@ impl StdFileResource {
       let mut fs_file = RcRef::map(&self, |r| r.fs_file.as_ref().unwrap())
         .borrow_mut()
         .await;
-      let nwritten = fs_file.0.as_mut().unwrap().write(&buf).await?;
-      fs_file.0.as_mut().unwrap().flush().await?;
+      #[cfg(not(unix))]
+      let nwritten = {
+        let nwritten = fs_file.0.as_mut().unwrap().write(&buf).await?;
+        fs_file.0.as_mut().unwrap().flush().await?;
+        nwritten
+      };
+      #[cfg(unix)]
+      let nwritten = {
+        match fs_file.2.as_mut() {
+          Some(fs_file) => {
+            let nwritten = fs_file.write(&buf).await?;
+            fs_file.flush().await?;
+            nwritten
+          }
+          None => {
+            let nwritten = fs_file.0.as_mut().unwrap().write(&buf).await?;
+            fs_file.0.as_mut().unwrap().flush().await?;
+            nwritten
+          }
+        }
+      };
       Ok(nwritten)
     } else {
       Err(resource_unavailable())
