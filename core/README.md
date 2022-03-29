@@ -29,3 +29,11 @@ as examples of usage.
 
 TypeScript support and lots of other functionality are not available at this
 layer. See the [CLI](https://github.com/denoland/deno/tree/main/cli) for that.
+
+## Resources
+
+Resources are object associated to ops that live on the Rust heap. Ops can
+add/remove resources, which live longer than the op call itself. Since Deno
+1.x.x, lifetime of these resources is managed by V8 directly using GC
+finalization. Each resource implements a base object that stores atleast one
+field (with a pointer to the object on the Rust heap).
