@@ -19,6 +19,26 @@ use std::path::PathBuf;
 use crate::urlpattern::op_urlpattern_parse;
 use crate::urlpattern::op_urlpattern_process_match_input;
 
+struct URL {
+  url: Url,
+  base_url: Option<Url>,
+}
+
+#[deno_core::op_class]
+impl URL {
+  pub fn new(href: String, base_href: Option<String>) -> Result<Self, AnyError> {
+    let base_url = base_href
+      .as_ref()
+      .map(|b| Url::parse(b).map_err(|_| type_error("Invalid base URL")))
+      .transpose()?;
+    let url = Url::options()
+      .base_url(base_url.as_ref())
+      .parse(&href)
+      .map_err(|_| type_error("Invalid URL"))?;
+    Ok(Self { url, base_url })
+  }
+}
+
 pub fn init() -> Extension {
   Extension::builder()
     .js(include_js_files!(

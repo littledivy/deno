@@ -35,6 +35,89 @@ fn core_import() -> TokenStream2 {
 }
 
 #[proc_macro_attribute]
+pub fn op_class(_attr: TokenStream, item: TokenStream) -> TokenStream {
+  let impl_item = syn::parse_macro_input!(item as syn::ItemImpl);
+
+  let class_name = impl_item.self_ty.clone();
+  // Grab the "new" method from the impl.
+  let new_method = impl_item.items.iter().find(|item| {
+    if let syn::ImplItem::Method(method) = item {
+      method.sig.ident == "new"
+    } else {
+      false
+    }
+  }).expect("`new` method not found");
+  let new_method = match new_method {
+    syn::ImplItem::Method(method) => method,
+    _ => panic!("`new` method not found"),
+  };
+  let inputs = &new_method.sig.inputs;
+  let core = core_import();
+  let constructor_ident_seq: TokenStream2 = inputs
+    .clone()
+    .into_iter()
+    .enumerate()
+    .map(|(i, _)| format!("arg_{i}"))
+    .collect::<Vec<_>>()
+    .join(", ")
+    .parse()
+    .unwrap();
+  let constructor_decls: TokenStream2 = inputs
+    .clone()
+    .iter()
+    .enumerate()
+    .map(|(i, arg)| {
+      codegen_arg(&core, arg, format!("arg_{i}").as_ref(), i)
+    })
+    .collect();
+
+  quote! {
+    #impl_item
+
+    #[doc(hidden)]
+    impl #class_name {
+      pub fn register(
+        scope: &mut #core::v8::HandleScope,
+        mut rv: #core::v8::ReturnValue,
+      ) {
+        fn constructor(
+          scope: &mut #core::v8::HandleScope,
+          args: #core::v8::FunctionCallbackArguments,
+          mut rv: #core::v8::ReturnValue,
+        ) {
+          // SAFETY: Unchecked cast to external since #core guarantees args.data() is a v8 External.
+          let templ_raw = unsafe {
+            #core::v8::Local::<#core::v8::External>::cast(args.data().unwrap_unchecked())
+          }.value();
+          
+          #constructor_decls
+          // SAFETY: TODO(@littledivy)
+          let obj_templ = unsafe { ::std::mem::transmute::<_, #core::v8::Local<#core::v8::ObjectTemplate>>(templ_raw) };
+          let obj_instance = obj_templ.new_instance(scope).unwrap();
+        
+          let thing = #class_name::new(#constructor_ident_seq);
+          let thing_ptr = Box::into_raw(Box::new(thing));
+          let thing_ext = #core::v8::External::new(scope, thing_ptr as *mut _);
+          obj_instance.set_internal_field(0, thing_ext.into());
+          rv.set(obj_instance.into());
+        }
+
+        let obj_templ = #core::v8::ObjectTemplate::new(scope);
+        obj_templ.set_internal_field_count(1);
+
+        let templ_pesistent = #core::v8::Global::new(scope, obj_templ);
+        let templ_external = #core::v8::External::new(scope, templ_pesistent.into_raw().as_ptr() as *mut _);
+
+        let constructor_templ = #core::v8::FunctionTemplate::builder(constructor)
+          .data(templ_external.into())
+          .build(scope);
+        rv.set(constructor_templ.get_function(scope).unwrap().into());
+      }
+    }
+  }.into()
+}
+
+#[proc_macro_attribute]
 pub fn op(_attr: TokenStream, item: TokenStream) -> TokenStream {
   let func = syn::parse::<syn::ItemFn>(item).expect("expected a function");
   let name = &func.sig.ident;
