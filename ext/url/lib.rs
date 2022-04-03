@@ -19,14 +19,18 @@ use std::path::PathBuf;
 use crate::urlpattern::op_urlpattern_parse;
 use crate::urlpattern::op_urlpattern_process_match_input;
 
-struct URL {
+pub struct URL {
   url: Url,
   base_url: Option<Url>,
 }
 
 #[deno_core::op_class]
 impl URL {
-  pub fn new(href: String, base_href: Option<String>) -> Result<Self, AnyError> {
+  pub fn new(
+    href: String,
+    base_href: Option<String>,
+  ) -> Result<Self, AnyError> {
+    println!("URL::new: href={:?}, base_href={:?}", href, base_href);
     let base_url = base_href
       .as_ref()
       .map(|b| Url::parse(b).map_err(|_| type_error("Invalid base URL")))
@@ -36,6 +40,11 @@ impl URL {
       .parse(&href)
       .map_err(|_| type_error("Invalid URL"))?;
     Ok(Self { url, base_url })
+  }
+
+  #[getter]
+  pub fn hash(&self) -> String {
+    quirks::hash(&self.url).to_string()
   }
 }
 
@@ -53,6 +62,7 @@ pub fn init() -> Extension {
       op_url_stringify_search_params::decl(),
       op_urlpattern_parse::decl(),
       op_urlpattern_process_match_input::decl(),
+      URL::decl(),
     ])
     .build()
 }

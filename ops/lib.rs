@@ -40,13 +40,17 @@ pub fn op_class(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
   let class_name = impl_item.self_ty.clone();
   // Grab the "new" method from the impl.
-  let new_method = impl_item.items.iter().find(|item| {
-    if let syn::ImplItem::Method(method) = item {
-      method.sig.ident == "new"
-    } else {
-      false
-    }
-  }).expect("`new` method not found");
+  let new_method = impl_item
+    .items
+    .iter()
+    .find(|item| {
+      if let syn::ImplItem::Method(method) = item {
+        method.sig.ident == "new"
+      } else {
+        false
+      }
+    })
+    .expect("`new` method not found");
   let new_method = match new_method {
     syn::ImplItem::Method(method) => method,
     _ => panic!("`new` method not found"),
@@ -66,53 +70,65 @@ pub fn op_class(_attr: TokenStream, item: TokenStream) -> TokenStream {
     .clone()
     .iter()
     .enumerate()
-    .map(|(i, arg)| {
-      codegen_arg(&core, arg, format!("arg_{i}").as_ref(), i)
-    })
+    .map(|(i, arg)| codegen_arg(&core, arg, format!("arg_{i}").as_ref(), i))
     .collect();
 
+  // Get all #[getter] attributes in the impl.
+  let getters = impl_item
+    .items
+    .iter()
+    .flat_map(|method| {
+      method
+        .attrs
+        .iter()
+        .filter_map(|attr| {
+          if attr.path.is_ident("getter") {
+            Some(attr)
+          } else {
+            None
+          }
+        })
+    })
+    .collect::<Vec<_>>();
+  // Codegen the getters.
+  
   quote! {
     #impl_item
 
     #[doc(hidden)]
     impl #class_name {
-      pub fn register(
-        scope: &mut #core::v8::HandleScope,
-        mut rv: #core::v8::ReturnValue,
-      ) {
-        fn constructor(
+      pub fn constructor_fn_ptr() -> #core::v8::FunctionCallback {
+        use #core::v8::MapFnTo;
+        Self::constructor.map_fn_to()
+      }
+
+      pub fn decl () -> #core::OpDecl {
+        #core::OpDecl {
+          name: "URL",
+          v8_fn_ptr: Self::constructor_fn_ptr(),
+          enabled: true,
+          is_async: false,
+        }
+      }
+
+       fn constructor(
           scope: &mut #core::v8::HandleScope,
           args: #core::v8::FunctionCallbackArguments,
           mut rv: #core::v8::ReturnValue,
         ) {
-          // SAFETY: Unchecked cast to external since #core guarantees args.data() is a v8 External.
-          let templ_raw = unsafe {
-            #core::v8::Local::<#core::v8::External>::cast(args.data().unwrap_unchecked())
-          }.value();
-          
+          let obj_templ = #core::v8::ObjectTemplate::new(scope);
+          obj_templ.set_internal_field_count(1);
           #constructor_decls
-          // SAFETY: TODO(@littledivy)
-          let obj_templ = unsafe { ::std::mem::transmute::<_, #core::v8::Local<#core::v8::ObjectTemplate>>(templ_raw) };
           let obj_instance = obj_templ.new_instance(scope).unwrap();
-        
           let thing = #class_name::new(#constructor_ident_seq);
           let thing_ptr = Box::into_raw(Box::new(thing));
           let thing_ext = #core::v8::External::new(scope, thing_ptr as *mut _);
           obj_instance.set_internal_field(0, thing_ext.into());
-          rv.set(obj_instance.into());
+          let weak = #core::v8::Weak::with_finalizer(scope, obj_instance, Box::new(move || {
+            let _ = unsafe { Box::from_raw(thing_ptr) };
+          }));
+          rv.set(weak.to_local(scope).unwrap().into());
         }
-
-        let obj_templ = #core::v8::ObjectTemplate::new(scope);
-        obj_templ.set_internal_field_count(1);
-
-        let templ_pesistent = #core::v8::Global::new(scope, obj_templ);
-        let templ_external = #core::v8::External::new(scope, templ_pesistent.into_raw().as_ptr() as *mut _);
-
-        let constructor_templ = #core::v8::FunctionTemplate::builder(constructor)
-          .data(templ_external.into())
-          .build(scope);
-        rv.set(constructor_templ.get_function(scope).unwrap().into());
-      }
     }
   }.into()
 }

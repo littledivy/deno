@@ -174,6 +174,9 @@
   }
 
   function opSync(opName, ...args) {
+    if(opIds[opName] === undefined) {
+      throw new Error(`Operation "${opName}" not found. ${JSON.stringify(opIds)}`);
+    }
     return unwrapOpResult(ops[opName](opIds[opName], ...args));
   }
 

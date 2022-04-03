@@ -241,6 +241,7 @@ pub fn initialize_context<'s>(
   for op in ops {
     set_func_raw(scope, ops_val, op.name, op.v8_fn_ptr, raw_op_state);
   }
+
   scope.escape(context)
 }
 
