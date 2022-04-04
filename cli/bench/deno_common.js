@@ -106,6 +106,19 @@ function benchRequestNew() {
   return benchSync("request_new", 5e5, () => new Request("https://deno.land"));
 }
 
+function benchLocalStorage() {
+  localStorage.clear();
+  benchSync("local_storage_set", 1e4, () => {
+    localStorage.setItem("foo", "bar");
+  });
+  benchSync("local_storage_get", 1e4, () => {
+    localStorage.getItem("foo");
+  });
+  benchSync("local_storage_remove", 1e4, () => {
+    localStorage.removeItem("foo");
+  });
+}
+
 function benchOpVoidSync() {
   return benchSync("op_void_sync", 1e7, () => Deno.core.opSync("op_void_sync"));
 }
@@ -131,6 +144,7 @@ async function main() {
   // also a decent representation of a non-trivial JSON-op
   benchUrlParse();
   benchLargeBlobText();
+  benchLocalStorage();
   benchB64RtLong();
   benchB64RtShort();
   // IO ops
