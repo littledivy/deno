@@ -62,6 +62,9 @@ use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::task::spawn_local;
 
+#[cfg(unix)]
+use std::os::unix::prelude::*;
+
 mod compressible;
 
 pub fn init() -> Extension {
@@ -107,14 +110,18 @@ struct HttpConnResource {
   acceptors_tx: mpsc::UnboundedSender<HttpAcceptor>,
   closed_fut: Shared<RemoteHandle<Result<(), Arc<hyper::Error>>>>,
   cancel_handle: Rc<CancelHandle>, // Closes gracefully and cancels accept ops.
+  #[cfg(unix)]
+  stream_handle: RawFd, // `sendfile(2)` optimization.
 }
 
 impl HttpConnResource {
   fn new<S>(io: S, scheme: &'static str, addr: HttpSocketAddr) -> Self
   where
-    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    S: AsyncRead + AsyncWrite + Unpin + Send + AsRawFd + 'static,
   {
     let (acceptors_tx, acceptors_rx) = mpsc::unbounded::<HttpAcceptor>();
+    #[cfg(unix)]
+    let stream_handle = io.as_raw_fd();
     let service = HttpService::new(acceptors_rx);
 
     let conn_fut = Http::new()
@@ -151,6 +158,8 @@ impl HttpConnResource {
       acceptors_tx,
       closed_fut,
       cancel_handle,
+      #[cfg(unix)]
+      stream_handle,
     }
   }
 
@@ -213,7 +222,7 @@ pub fn http_create_conn_resource<S, A>(
   scheme: &'static str,
 ) -> Result<ResourceId, AnyError>
 where
-  S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+  S: AsyncRead + AsyncWrite + Unpin + Send + AsRawFd + 'static,
   A: Into<HttpSocketAddr>,
 {
   let conn = HttpConnResource::new(io, scheme, addr.into());

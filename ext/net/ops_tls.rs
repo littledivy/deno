@@ -450,6 +450,16 @@ impl TlsStreamInner {
   }
 }
 
+#[cfg(unix)]
+use std::os::unix::prelude::*;
+
+#[cfg(unix)]
+impl AsRawFd for TlsStream {
+  fn as_raw_fd(&self) -> RawFd {
+    self.0.as_ref().unwrap().tcp.as_raw_fd()
+  }
+}
+
 pub struct ReadHalf {
   shared: Arc<Shared>,
 }
