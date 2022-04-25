@@ -352,6 +352,17 @@ impl Resource for StdFileResource {
     // TODO: do not cancel file I/O when file is writable.
     self.cancel.cancel()
   }
+
+  #[cfg(unix)]
+  fn backing_fd(&self) -> Option<std::os::unix::prelude::RawFd> {
+    use std::os::unix::io::AsRawFd;
+    self.fs_file.as_ref().and_then(|fs_file| {
+      fs_file
+        .0
+        .as_ref()
+        .map(|f| f.as_ref().lock().unwrap().as_raw_fd())
+    })
+  }
 }
 
 #[op]

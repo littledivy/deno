@@ -28,6 +28,7 @@ deno_websocket = { version = "0.54.0", path = "../websocket" }
 flate2 = "1.0.22"
 fly-accept-encoding = "0.2.0-alpha.5"
 hyper = { version = "0.14.9", features = ["server", "stream", "http1", "http2", "runtime"] }
+libc = "0.2"
 mime = "0.3.16"
 percent-encoding = "2.1.0"
 phf = { version = "0.10", features = ["macros"] }

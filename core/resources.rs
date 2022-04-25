@@ -65,10 +65,10 @@ pub trait Resource: Any + 'static {
   /// resource has been removed from the resource table.
   fn close(self: Rc<Self>) {}
 
-  /// Resources backed by a file descriptor can let ops know to allow for 
+  /// Resources backed by a file descriptor can let ops know to allow for
   /// low-level optimizations.
   #[cfg(unix)]
-  fn backing_fd(&self) -> Option<RawFd> {
+  fn backing_fd(&self) -> Option<std::os::unix::prelude::RawFd> {
     None
   }
 }
