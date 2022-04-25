@@ -65,10 +65,11 @@ use tokio::io::AsyncWriteExt;
 use tokio::task::spawn_local;
 use tokio_util::io::ReaderStream;
 
-#[cfg(unix)]
 use std::os::unix::prelude::*;
 
 pub mod compressible;
+#[cfg(unix)]
+mod sendfile;
 
 pub fn init() -> Extension {
   Extension::builder()
@@ -708,7 +709,6 @@ async fn op_http_write_resource(
     .get::<HttpStreamResource>(rid)?;
   let mut wr = RcRef::map(&http_stream, |r| &r.wr).borrow_mut().await;
   let resource = state.borrow().resource_table.get_any(stream)?;
-  let mut nread = 0;
   loop {
     match *wr {
       HttpResponseWriter::Headers(_) => {
@@ -723,42 +723,17 @@ async fn op_http_write_resource(
     // Don't do this on TLS connections.
     #[cfg(unix)]
     if let Some(fd) = resource.backing_fd() {
-      use std::ptr::null_mut;
       let stream_handle = http_stream.conn.stream_handle;
-      let (res, length) = tokio::task::spawn_blocking(move || {
-        let mut length = 0; // Send all bytes.
-        let res = unsafe {
-          libc::sendfile(
-            fd,
-            stream_handle,
-            nread as libc::off_t,
-            &mut length,
-            null_mut(),
-            0,
-          )
-        };
-        (res, length)
-      })
-      .await?;
-
-      nread += length as usize;
-      if res == -1 {
-        let error = std::io::Error::last_os_error();
-        if matches!(
-          error.kind(),
-          std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
-        ) {
-          continue;
-        } else {
-          println!("error: {:?}", error);
-          break;
-        }
+      let tx = sendfile::SendFile {
+        io: (fd, stream_handle),
+        written: 0,
+      };
+      if let Err(err) = tokio::spawn(async move { tx.await }).await? {
+        println!("sendfile error: {:?}", err);
+        http_stream.conn.closed().await?;
+        *wr = HttpResponseWriter::Closed;
       }
-
-      if length == 0 {
-        break;
-      }
-      continue;
+      break;
     }
 
     let vec = vec![0u8; 64 * 1024]; // 64KB
