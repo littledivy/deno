@@ -353,6 +353,19 @@ impl Default for HttpResponseWriter {
   }
 }
 
+#[repr(u8)]
+pub enum HttpMethod {
+  Get = 0,
+  Post = 1,
+  Put = 2,
+  Delete = 3,
+  Head = 4,
+  Connect = 5,
+  Options = 6,
+  Trace = 7,
+  Patch = 8,
+}
+
 // We use a tuple instead of struct to avoid serialization overhead of the keys.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -362,7 +375,8 @@ struct NextRequestResponse(
   // method:
   // This is a String rather than a ByteString because reqwest will only return
   // the method as a str which is guaranteed to be ASCII-only.
-  String,
+  u8,
+  Option<String>,
   // headers:
   Vec<(ByteString, ByteString)>,
   // url:
@@ -396,13 +410,28 @@ async fn op_http_accept(
       .unwrap_or(Encoding::Identity);
   }
 
-  let method = request.method().to_string();
+  let mut method_str: Option<String> = None;
+  let method: u8 = match *request.method() {
+    hyper::Method::GET => HttpMethod::Get as u8,
+    hyper::Method::POST => HttpMethod::Post as u8,
+    hyper::Method::PUT => HttpMethod::Put as u8,
+    hyper::Method::DELETE => HttpMethod::Delete as u8,
+    hyper::Method::HEAD => HttpMethod::Head as u8,
+    hyper::Method::CONNECT => HttpMethod::Connect as u8,
+    hyper::Method::OPTIONS => HttpMethod::Options as u8,
+    hyper::Method::TRACE => HttpMethod::Trace as u8,
+    hyper::Method::PATCH => HttpMethod::Patch as u8,
+    _ => {
+      method_str = Some(request.method().to_string());
+      10 // OOB
+    }
+  };
   let headers = req_headers(request);
   let url = req_url(request, conn.scheme(), conn.addr());
 
   let stream_rid = state.borrow_mut().resource_table.add_rc(stream);
 
-  let r = NextRequestResponse(stream_rid, method, headers, url);
+  let r = NextRequestResponse(stream_rid, method, method_str, headers, url);
   Ok(Some(r))
 }
 

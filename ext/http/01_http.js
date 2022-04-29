@@ -58,6 +58,7 @@
   const connErrorSymbol = Symbol("connError");
   const _deferred = Symbol("upgradeHttpDeferred");
 
+  const METHODS = ["GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"];
   class HttpConn {
     #rid = 0;
     #closed = false;
@@ -111,11 +112,12 @@
         return null;
       }
 
-      const [streamRid, method, headersList, url] = nextRequest;
+      const [streamRid, methodIdx, methodStr, headersList, url] = nextRequest;
       SetPrototypeAdd(this.managedResources, streamRid);
 
       /** @type {ReadableStream<Uint8Array> | undefined} */
       let body = null;
+      const method = METHODS[methodIdx] ?? methodStr;
       // There might be a body, but we don't expose it for GET/HEAD requests.
       // It will be closed automatically once the request has been handled and
       // the response has been sent.
