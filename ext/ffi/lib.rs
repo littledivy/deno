@@ -103,7 +103,7 @@ unsafe impl Sync for PtrSymbol {}
 
 struct DynamicLibraryResource {
   lib: Library,
-  symbols: HashMap<String, Box<Symbol>>,
+  symbols: HashMap<String, Symbol>,
 }
 
 impl Resource for DynamicLibraryResource {
@@ -480,6 +480,108 @@ pub(crate) fn format_error(e: dlopen::Error, path: String) -> String {
   }
 }
 
+use dynasmrt::{dynasm, DynasmApi, DynasmLabelApi};
+
+macro_rules! call_extern {
+  ($ops:ident, $addr:ident) => {dynasm!($ops
+    ; str x1, [sp, #24]
+    ; ldr x9, ->$addr
+    ; blr x9
+    ; mov x9, x0
+    ; ldp x0, x1, [sp, #16]
+    ; ldp x2, x3, [sp]
+  );};
+}
+
+struct State<'s, 'b, 'cb> {
+  scope: &'b mut v8::HandleScope<'s>,
+  v8_args: v8::FunctionCallbackArguments<'b>,
+  rv: v8::ReturnValue<'cb>,
+  info: &'b mut JitInfo,
+}
+
+fn compile(symbol: &Symbol) -> *const u8 {
+  let mut ops = dynasmrt::aarch64::Assembler::new().unwrap();
+
+  // literals
+  dynasm!(ops
+      ; ->to_u8:
+      ; .qword to_u8 as _
+      ; ->call_void:
+      ; .qword call_void as _
+      ; ->call_u8:
+      ; .qword call_u8 as _
+  );
+  let offset = ops.offset();
+
+  dynasm!(ops
+      ; str x30, [sp, #-16]!
+      ; stp x0, x1, [sp, #-16]!
+      ; stp x2, x3, [sp, #-16]!
+  );
+
+  for (index, type_) in symbol.parameter_types.iter().enumerate() {
+    match type_ {
+      NativeType::U8 => dynasm!(ops
+        ; mov x1, index as u64
+        ;; call_extern!(ops, to_u8)
+      ),
+      _ => todo!(),
+    }
+  }
+
+  match symbol.result_type {
+    NativeType::U8 => dynasm!(ops
+      ;; call_extern!(ops, call_u8)
+    ),
+    NativeType::Void => dynasm!(ops
+      ;; call_extern!(ops, call_void)
+    ),
+    _ => todo!(),
+  }
+
+  dynasm!(ops
+      ; mov x0, 0
+      ; add sp, sp, #32
+      ; ldr x30, [sp], #16
+      ; ret
+  );
+  let buf = ops.finalize().unwrap();
+  let a = buf.ptr(offset);
+  std::mem::forget(buf);
+  a
+}
+
+unsafe extern "C" fn to_u8(state: *mut State, index: usize) {
+  let state = &mut *state;
+
+  let value = state.v8_args.get(index as i32);
+
+  let value = value
+    .uint32_value(state.scope)
+    .ok_or_else(|| type_error("Invalid FFI u8 type, expected number"))
+    .unwrap() as u8;
+
+  state.info._owned.push(NativeValue { u8_value: value });
+  state.info.call_args.push(Arg::new(&state.info._owned[index]));
+}
+
+unsafe extern "C" fn call_void(state: *mut State) {
+  let state = &mut *state;
+  state.info.cif.call::<()>(state.info.ptr, &state.info.call_args);
+  state.info.call_args.clear();
+  state.info._owned.clear();
+}
+
+unsafe extern "C" fn call_u8(state: *mut State) {
+  let state = &mut *state;
+  let value = unsafe { state.info.cif.call::<u8>(state.info.ptr, &state.info.call_args) };
+  let local_value = v8::Integer::new_from_unsigned(state.scope, value as u32).into();
+  state.rv.set(local_value);
+  state.info.call_args.clear();
+  state.info._owned.clear();
+}
+
 #[op(v8)]
 fn op_ffi_load<FP, 'scope>(
   scope: &mut v8::HandleScope<'scope>,
@@ -540,23 +642,24 @@ where
         );
 
         let func_key = v8::String::new(scope, &symbol_key).unwrap();
-        let sym = Box::new(Symbol {
+        let sym = Symbol {
           cif,
           ptr,
           parameter_types: foreign_fn.parameters,
           result_type: foreign_fn.result,
-        });
+        };
 
-        resource.symbols.insert(symbol_key, sym.clone());
+        
         match foreign_fn.non_blocking {
           // Generate functions for synchronous calls.
           Some(false) | None => {
-            let function = make_sync_fn(scope, Box::leak(sym));
+            let function = make_sync_fn(scope, &sym);
             obj.set(scope, func_key.into(), function.into());
           }
           // This optimization is not yet supported for non-blocking calls.
           _ => {}
         };
+        resource.symbols.insert(symbol_key, sym);
       }
     }
   }
@@ -570,34 +673,47 @@ where
   ))
 }
 
+struct JitInfo {
+  jit: fn(*mut State) -> bool,
+  cif: libffi::middle::Cif,
+  ptr: libffi::middle::CodePtr,
+  call_args: Vec<Arg>,
+  _owned: Vec<NativeValue>,
+}
+
 // Create a JavaScript function for synchronous FFI call to
 // the given symbol.
 fn make_sync_fn<'s>(
   scope: &mut v8::HandleScope<'s>,
-  sym: *mut Symbol,
+  sym: &Symbol,
 ) -> v8::Local<'s, v8::Function> {
+  let jit = compile(sym);
+  let info = Box::into_raw(Box::new(JitInfo {
+    jit: unsafe { std::mem::transmute(jit) },
+    cif: sym.cif.clone(),
+    ptr: sym.ptr,
+    call_args: Vec::with_capacity(sym.parameter_types.len()),
+    _owned: Vec::with_capacity(sym.parameter_types.len()),
+  }));
+
   let func = v8::Function::builder(
     |scope: &mut v8::HandleScope,
      args: v8::FunctionCallbackArguments,
      mut rv: v8::ReturnValue| {
-      let external: v8::Local<v8::External> =
-        args.data().unwrap().try_into().unwrap();
-      // SAFETY: The pointer will not be deallocated until the function is
-      // garbage collected.
-      let symbol = unsafe { &*(external.value() as *const Symbol) };
-      match ffi_call_sync(scope, args, symbol) {
-        Ok(result) => {
-          // SAFETY: Same return type declared to libffi; trust user to have it right beyond that.
-          let result = unsafe { result.to_v8(scope, symbol.result_type) };
-          rv.set(result.v8_value);
-        }
-        Err(err) => {
-          deno_core::_ops::throw_type_error(scope, err.to_string());
-        }
+      let external: v8::Local<v8::External> = unsafe { v8::Local::cast(args.data().unwrap_unchecked()) };
+      let info = unsafe { &mut *(external.value() as *mut JitInfo) };
+      let jit = info.jit;
+      let mut state = State {
+        scope,
+        v8_args: args,
+        rv,
+        info,
       };
+      jit(&mut state);
     },
   )
-  .data(v8::External::new(scope, sym as *mut _).into())
+  // .data(v8::External::new(scope, sym as *mut _).into())
+  .data(v8::External::new(scope, info as *mut _).into())
   .build(scope)
   .unwrap();
 
@@ -607,7 +723,7 @@ fn make_sync_fn<'s>(
     Box::new(move |_| {
       // SAFETY: This is never called twice. pointer obtained
       // from Box::into_raw, hence, satisfies memory layout requirements.
-      unsafe { Box::from_raw(sym) };
+      unsafe { Box::from_raw(info) };
     }),
   );
 
@@ -1564,7 +1680,7 @@ fn op_ffi_call_nonblocking<'scope>(
     let state = state.borrow();
     let resource = state.resource_table.get::<DynamicLibraryResource>(rid)?;
     let symbols = &resource.symbols;
-    *symbols
+    symbols
       .get(&symbol)
       .ok_or_else(|| type_error("Invalid FFI symbol name"))?
       .clone()

@@ -42,6 +42,11 @@ pub extern "C" fn is_null_ptr(ptr: *const u8) -> u8 {
 }
 
 #[no_mangle]
+pub extern "C" fn add_u8(a: u8, b: u8) -> u8 {
+  a + b
+}
+
+#[no_mangle]
 pub extern "C" fn add_u32(a: u32, b: u32) -> u32 {
   a + b
 }
