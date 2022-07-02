@@ -32,7 +32,6 @@ for await (const conn of tcp) {
         [],
         "Hello World",
       );
-      Deno.core.close(stream);
     }
   })();
 }

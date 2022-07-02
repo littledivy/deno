@@ -47,11 +47,9 @@ use hyper::Body;
 use hyper::Request;
 use hyper::Response;
 use serde::Serialize;
-use shared_arena::Arena;
-use shared_arena::ArenaRc;
+use typed_arena::Arena;
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::cell::UnsafeCell;
 use std::cmp::min;
 use std::error::Error;
 use std::future::Future;
@@ -59,7 +57,6 @@ use std::io;
 use std::io::Write;
 use std::mem::replace;
 use std::mem::take;
-use std::ops::Deref;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -111,13 +108,8 @@ impl From<tokio::net::unix::SocketAddr> for HttpSocketAddr {
   }
 }
 
-thread_local! {
-  static ARENA: UnsafeCell<Arena<HttpStreamResourceInner>> = UnsafeCell::new(
-    Arena::with_capacity(1_000_000)
-  );
-}
-
 struct HttpConnResource {
+  arena: Arena<Rc<HttpStreamResource>>,
   addr: HttpSocketAddr,
   scheme: &'static str,
   acceptors_tx: mpsc::UnboundedSender<HttpAcceptor>,
@@ -132,6 +124,7 @@ impl HttpConnResource {
   {
     let (acceptors_tx, acceptors_rx) = mpsc::unbounded::<HttpAcceptor>();
     let service = HttpService::new(acceptors_rx);
+    let arena = Arena::new();
     let conn_fut = Http::new()
       .with_executor(LocalExecutor)
       .serve_connection(io, service)
@@ -161,6 +154,7 @@ impl HttpConnResource {
     spawn_local(task_fut);
 
     Self {
+      arena,
       addr,
       scheme,
       acceptors_tx,
@@ -172,7 +166,7 @@ impl HttpConnResource {
   // Accepts a new incoming HTTP request.
   async fn accept(
     self: &Rc<Self>,
-  ) -> Result<Option<HttpStreamResource>, AnyError> {
+  ) -> Result<Option<Rc<HttpStreamResource>>, AnyError> {
     let fut = async {
       let (request_tx, request_rx) = oneshot::channel();
       let (response_tx, response_rx) = oneshot::channel();
@@ -181,10 +175,9 @@ impl HttpConnResource {
       self.acceptors_tx.unbounded_send(acceptor).ok()?;
 
       let request = request_rx.await.ok()?;
-      let stream = ARENA.with(|cell| {
-        HttpStreamResource::new(unsafe{ cell.get().as_ref() }.unwrap(), self, request, response_tx)
-      });      
-      Some(stream)
+      
+      let stream = self.arena.alloc(Rc::new(HttpStreamResource::new(self, request, response_tx)));
+      Some(stream.clone())
     };
 
     async {
@@ -306,10 +299,6 @@ impl HttpAcceptor {
 
 /// A resource representing a single HTTP request/response stream.
 pub struct HttpStreamResource {
-  inner: ArenaRc<HttpStreamResourceInner>,
-}
-
-pub struct HttpStreamResourceInner {
   conn: Rc<HttpConnResource>,
   pub rd: AsyncRefCell<HttpRequestReader>,
   wr: AsyncRefCell<HttpResponseWriter>,
@@ -319,27 +308,17 @@ pub struct HttpStreamResourceInner {
 
 impl HttpStreamResource {
   fn new(
-    arena: &Arena<HttpStreamResourceInner>,
     conn: &Rc<HttpConnResource>,
     request: Request<Body>,
     response_tx: oneshot::Sender<Response<Body>>,
   ) -> Self {
-    let inner = HttpStreamResourceInner {
+    Self {
       conn: conn.clone(),
       rd: HttpRequestReader::Headers(request).into(),
       wr: HttpResponseWriter::Headers(response_tx).into(),
       accept_encoding: RefCell::new(Encoding::Identity),
       cancel_handle: CancelHandle::new(),
-    };
-    Self { inner: arena.alloc_rc(inner) }
-  }
-}
-
-impl Deref for HttpStreamResource {
-  type Target = HttpStreamResourceInner;
-
-  fn deref(&self) -> &Self::Target {
-    &self.inner
+    }
   }
 }
 
@@ -349,7 +328,7 @@ impl Resource for HttpStreamResource {
   }
 
   fn close(self: Rc<Self>) {
-    self.inner.cancel_handle.cancel();
+    self.cancel_handle.cancel();
   }
 }
 
@@ -404,7 +383,7 @@ async fn op_http_accept(
   let conn = state.borrow().resource_table.get::<HttpConnResource>(rid)?;
 
   let stream = match conn.accept().await {
-    Ok(Some(stream)) => Rc::new(stream),
+    Ok(Some(stream)) => stream,
     Ok(None) => return Ok(None),
     Err(err) => return Err(err),
   };
