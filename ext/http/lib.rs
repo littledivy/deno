@@ -47,8 +47,11 @@ use hyper::Body;
 use hyper::Request;
 use hyper::Response;
 use serde::Serialize;
+use shared_arena::Arena;
+use shared_arena::ArenaRc;
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::cell::UnsafeCell;
 use std::cmp::min;
 use std::error::Error;
 use std::future::Future;
@@ -56,6 +59,7 @@ use std::io;
 use std::io::Write;
 use std::mem::replace;
 use std::mem::take;
+use std::ops::Deref;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -107,6 +111,12 @@ impl From<tokio::net::unix::SocketAddr> for HttpSocketAddr {
   }
 }
 
+thread_local! {
+  static ARENA: UnsafeCell<Arena<HttpStreamResourceInner>> = UnsafeCell::new(
+    Arena::with_capacity(1_000_000)
+  );
+}
+
 struct HttpConnResource {
   addr: HttpSocketAddr,
   scheme: &'static str,
@@ -122,7 +132,6 @@ impl HttpConnResource {
   {
     let (acceptors_tx, acceptors_rx) = mpsc::unbounded::<HttpAcceptor>();
     let service = HttpService::new(acceptors_rx);
-
     let conn_fut = Http::new()
       .with_executor(LocalExecutor)
       .serve_connection(io, service)
@@ -172,7 +181,9 @@ impl HttpConnResource {
       self.acceptors_tx.unbounded_send(acceptor).ok()?;
 
       let request = request_rx.await.ok()?;
-      let stream = HttpStreamResource::new(self, request, response_tx);
+      let stream = ARENA.with(|cell| {
+        HttpStreamResource::new(unsafe{ cell.get().as_ref() }.unwrap(), self, request, response_tx)
+      });      
       Some(stream)
     };
 
@@ -295,6 +306,10 @@ impl HttpAcceptor {
 
 /// A resource representing a single HTTP request/response stream.
 pub struct HttpStreamResource {
+  inner: ArenaRc<HttpStreamResourceInner>,
+}
+
+pub struct HttpStreamResourceInner {
   conn: Rc<HttpConnResource>,
   pub rd: AsyncRefCell<HttpRequestReader>,
   wr: AsyncRefCell<HttpResponseWriter>,
@@ -304,17 +319,27 @@ pub struct HttpStreamResource {
 
 impl HttpStreamResource {
   fn new(
+    arena: &Arena<HttpStreamResourceInner>,
     conn: &Rc<HttpConnResource>,
     request: Request<Body>,
     response_tx: oneshot::Sender<Response<Body>>,
   ) -> Self {
-    Self {
+    let inner = HttpStreamResourceInner {
       conn: conn.clone(),
       rd: HttpRequestReader::Headers(request).into(),
       wr: HttpResponseWriter::Headers(response_tx).into(),
       accept_encoding: RefCell::new(Encoding::Identity),
       cancel_handle: CancelHandle::new(),
-    }
+    };
+    Self { inner: arena.alloc_rc(inner) }
+  }
+}
+
+impl Deref for HttpStreamResource {
+  type Target = HttpStreamResourceInner;
+
+  fn deref(&self) -> &Self::Target {
+    &self.inner
   }
 }
 
@@ -324,7 +349,7 @@ impl Resource for HttpStreamResource {
   }
 
   fn close(self: Rc<Self>) {
-    self.cancel_handle.cancel();
+    self.inner.cancel_handle.cancel();
   }
 }
 
