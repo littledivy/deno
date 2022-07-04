@@ -42,39 +42,29 @@
 
   // Helper functions
   function opUrlReparse(href, setter, value) {
-    return _urlParts(core.opSync("op_url_reparse", href, [setter, value]));
+    const lengths = new Uint32Array(11);
+    const inner = core.opSync("op_url_reparse", href, [setter, value], lengths);
+    return {
+      lengths,
+      inner,
+    };
   }
   function opUrlParse(href, maybeBase) {
-    return _urlParts(core.opSync("op_url_parse", href, maybeBase));
-  }
-  function _urlParts(internalParts) {
-    // WARNING: must match UrlParts serialization rust's url_result()
-    const {
-      0: href,
-      1: hash,
-      2: host,
-      3: hostname,
-      4: origin,
-      5: password,
-      6: pathname,
-      7: port,
-      8: protocol,
-      9: search,
-      10: username,
-    } = internalParts.split("\n");
+    const lengths = new Uint32Array(11);
+    const inner = core.opSync("op_url_parse", href, maybeBase, lengths);
     return {
-      href,
-      hash,
-      host,
-      hostname,
-      origin,
-      password,
-      pathname,
-      port,
-      protocol,
-      search,
-      username,
+      lengths,
+      inner,
     };
+  }
+
+  function extractPart(parsed, name) {
+    let cursor = 0;
+    for (let i = 0; i < name; i++) {
+      cursor = parsed.lengths[i];
+    }
+    const len = parsed.lengths[name];
+    return parsed.inner.substring(cursor, len);
   }
 
   class URLSearchParams {
@@ -358,7 +348,7 @@
     /** @return {string} */
     get hash() {
       webidl.assertBranded(this, URLPrototype);
-      return this[_url].hash;
+      return extractPart(this[_url], SET_HASH);
     }
 
     /** @param {string} value */
@@ -371,7 +361,7 @@
         context: "Argument 1",
       });
       try {
-        this[_url] = opUrlReparse(this[_url].href, SET_HASH, value);
+        this[_url] = opUrlReparse(extractPart(this[_url], 0), SET_HASH, value);
       } catch {
         /* pass */
       }
@@ -471,7 +461,7 @@
     /** @return {string} */
     get pathname() {
       webidl.assertBranded(this, URLPrototype);
-      return this[_url].pathname;
+      return extractPart(this[_url], 6);
     }
 
     /** @param {string} value */

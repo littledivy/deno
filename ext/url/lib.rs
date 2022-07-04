@@ -59,7 +59,8 @@ type UrlParts = String;
 pub fn op_url_parse(
   href: String,
   base_href: Option<String>,
-) -> Result<UrlParts, AnyError> {
+  indices: ZeroCopyBuf,
+) -> Result<String, AnyError> {
   let base_url = base_href
     .as_ref()
     .map(|b| Url::parse(b).map_err(|_| type_error("Invalid base URL")))
@@ -69,7 +70,7 @@ pub fn op_url_parse(
     .parse(&href)
     .map_err(|_| type_error("Invalid URL"))?;
 
-  Ok(url_parts(url))
+  Ok(url_parts(url, indices))
 }
 
 #[derive(PartialEq, Debug)]
@@ -90,6 +91,7 @@ pub enum UrlSetter {
 pub fn op_url_reparse(
   href: String,
   setter_opts: (u8, String),
+  indices: ZeroCopyBuf,
 ) -> Result<UrlParts, AnyError> {
   let mut url = Url::options()
     .parse(&href)
@@ -120,11 +122,16 @@ pub fn op_url_reparse(
       .map_err(|_| uri_error("Invalid username"))?,
   }
 
-  Ok(url_parts(url))
+  Ok(url_parts(url, indices))
 }
 
-fn url_parts(url: Url) -> UrlParts {
-  [
+fn url_parts(url: Url, indices: ZeroCopyBuf) -> UrlParts {
+  let len = indices.len() / 4;
+  let ptr = indices.as_ptr() as *mut u32;
+  let indices: &mut [u32] = unsafe { std::slice::from_raw_parts_mut(ptr, len) };
+
+  let mut parts = String::new();
+  for (index, part) in [
     quirks::href(&url),
     quirks::hash(&url),
     quirks::host(&url),
@@ -137,7 +144,13 @@ fn url_parts(url: Url) -> UrlParts {
     quirks::search(&url),
     quirks::username(&url),
   ]
-  .join("\n")
+  .iter()
+  .enumerate()
+  {
+    indices[index] = parts.len() as u32;
+    parts.push_str(part);
+  }
+  parts
 }
 
 #[op]
