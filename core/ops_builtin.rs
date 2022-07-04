@@ -1,3 +1,4 @@
+use crate::OpDecl;
 // Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
 use crate::error::format_file_name;
 use crate::error::type_error;
@@ -37,7 +38,14 @@ pub(crate) fn init_builtins() -> Extension {
       op_shutdown::decl(),
       op_metrics::decl(),
       op_format_file_name::decl(),
-      op_is_proxy::decl(),
+      OpDecl {
+        name: "op_is_proxy",
+        v8_fn_ptr: op_is_proxy,
+        enabled: true,
+        is_async: false,
+        is_unstable: false,
+        is_v8: true,
+      },
     ])
     .ops(crate::ops_builtin_v8::init_builtins_v8())
     .build()
@@ -185,7 +193,10 @@ fn op_format_file_name(file_name: String) -> String {
   format_file_name(&file_name)
 }
 
-#[op]
-fn op_is_proxy(value: serde_v8::Value) -> bool {
-  value.v8_value.is_proxy()
+extern "C" fn op_is_proxy(info: *const v8::FunctionCallbackInfo) {
+  let args =
+    unsafe { v8::FunctionCallbackArguments::from_function_callback_info(info) };
+  let mut rv = unsafe { v8::ReturnValue::from_function_callback_info(info) };
+  let is_proxy = args.get(0).is_proxy();
+  rv.set_uint32(is_proxy as u32);
 }
