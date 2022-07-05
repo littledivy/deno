@@ -25,7 +25,7 @@ for await (const conn of tcp) {
     for await (const req of http) {
       if (req == null) continue;
       const { 0: stream } = req;
-      await Deno.core.opAsync(
+      Deno.core.opSync(
         "op_http_write_headers",
         stream,
         200,

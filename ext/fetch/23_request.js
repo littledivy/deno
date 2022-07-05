@@ -79,15 +79,15 @@
     return {
       method,
       headerListInner: null,
-      get headerList() {
-        if (this.headerListInner === null) {
-          this.headerListInner = headerList();
-        }
-        return this.headerListInner;
-      },
-      set headerList(value) {
-        this.headerListInner = value;
-      },
+      // get headerList() {
+      //   if (this.headerListInner === null) {
+      //     this.headerListInner = headerList();
+      //   }
+      //   return this.headerListInner;
+      // },
+      // set headerList(value) {
+      //   this.headerListInner = value;
+      // },
       body,
       redirectMode: "follow",
       redirectCount: 0,

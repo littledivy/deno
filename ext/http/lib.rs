@@ -478,15 +478,14 @@ fn req_headers(
 }
 
 #[op]
-async fn op_http_write_headers(
-  state: Rc<RefCell<OpState>>,
+fn op_http_write_headers(
+  state: &mut OpState,
   rid: u32,
   status: u16,
   headers: Vec<(ByteString, ByteString)>,
   data: Option<StringOrBuffer>,
 ) -> Result<(), AnyError> {
   let stream = state
-    .borrow_mut()
     .resource_table
     .get::<HttpStreamResource>(rid)?;
 
@@ -532,7 +531,7 @@ async fn op_http_write_headers(
   let (new_wr, body) = http_response(data, compressing, encoding)?;
   let body = builder.status(status).body(body)?;
 
-  let mut old_wr = RcRef::map(&stream, |r| &r.wr).borrow_mut().await;
+  let mut old_wr = RcRef::map(&stream, |r| &r.wr).try_borrow_mut().unwrap();
   let response_tx = match replace(&mut *old_wr, new_wr) {
     HttpResponseWriter::Headers(response_tx) => response_tx,
     _ => return Err(http_error("response headers already sent")),
@@ -541,7 +540,7 @@ async fn op_http_write_headers(
   match response_tx.send(body) {
     Ok(_) => Ok(()),
     Err(_) => {
-      stream.conn.closed().await?;
+      // stream.conn.closed().await?;
       Err(http_error("connection closed while sending response"))
     }
   }
@@ -562,6 +561,7 @@ fn op_http_headers(
   }
 }
 
+#[inline]
 fn http_response(
   data: Option<StringOrBuffer>,
   compressing: bool,
