@@ -112,7 +112,7 @@ struct HttpConnResource {
   addr: HttpSocketAddr,
   scheme: &'static str,
   acceptors_tx: mpsc::UnboundedSender<HttpAcceptor>,
-  closed_fut: Shared<RemoteHandle<Result<(), Arc<hyper::Error>>>>,
+  // closed_fut: Shared<RemoteHandle<Result<(), Arc<hyper::Error>>>>,
   cancel_handle: Rc<CancelHandle>, // Closes gracefully and cancels accept ops.
 }
 
@@ -125,7 +125,6 @@ impl HttpConnResource {
     let service = HttpService::new(acceptors_rx);
 
     let conn_fut = Http::new()
-      .with_executor(LocalExecutor)
       .serve_connection(io, service)
       .with_upgrades();
 
@@ -133,30 +132,27 @@ impl HttpConnResource {
     // No new HTTP streams will be accepted, but existing streams will be able
     // to continue operating and eventually shut down cleanly.
     let cancel_handle = CancelHandle::new_rc();
-    let shutdown_fut = never().or_cancel(&cancel_handle).fuse();
-
-    // A local task that polls the hyper connection future to completion.
-    let task_fut = async move {
-      pin_mut!(shutdown_fut);
-      pin_mut!(conn_fut);
-      let result = match select(conn_fut, shutdown_fut).await {
-        Either::Left((result, _)) => result,
-        Either::Right((_, mut conn_fut)) => {
-          conn_fut.as_mut().graceful_shutdown();
-          conn_fut.await
-        }
+    // let shutdown_fut = never().or_cancel(&cancel_handle).fuse();
+    
+    std::thread::spawn(move || { 
+      let rt = tokio::runtime::Runtime::new().unwrap();
+      // A local task that polls the hyper connection future to completion.
+      let task_fut = async move {
+        // pin_mut!(shutdown_fut);
+        pin_mut!(conn_fut);
+        let result = conn_fut.await;
+        filter_enotconn(result).map_err(Arc::from)
       };
-      filter_enotconn(result).map_err(Arc::from)
-    };
-    let (task_fut, closed_fut) = task_fut.remote_handle();
-    let closed_fut = closed_fut.shared();
-    spawn_local(task_fut);
+      let (task_fut, closed_fut) = task_fut.remote_handle();
+      let closed_fut = closed_fut.shared();
+      rt.block_on(task_fut);
+    });
 
     Self {
       addr,
       scheme,
       acceptors_tx,
-      closed_fut,
+      // closed_fut,
       cancel_handle,
     }
   }
@@ -206,7 +202,8 @@ impl HttpConnResource {
 
   /// A future that completes when this HTTP connection is closed or errors.
   async fn closed(&self) -> Result<(), AnyError> {
-    self.closed_fut.clone().map_err(AnyError::from).await
+    // self.closed_fut.clone().map_err(AnyError::from).await
+    Ok(())
   }
 }
 
