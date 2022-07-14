@@ -926,9 +926,11 @@ impl JsRuntime {
     // Event loop middlewares
     let mut maybe_scheduling = false;
     {
+      
+      let context = self.global_context();
       let op_state = state_rc.borrow().op_state.clone();
       for f in &self.event_loop_middlewares {
-        if f(op_state.clone(), cx) {
+        if f(op_state.clone(), cx, context.clone()) {
           maybe_scheduling = true;
         }
       }
