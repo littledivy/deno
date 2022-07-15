@@ -45,6 +45,7 @@ use std::sync::Mutex;
 use std::sync::Once;
 use std::task::Context;
 use std::task::Poll;
+use std::task::Waker;
 
 type PendingOpFuture = OpCall<(PromiseId, OpId, OpResult)>;
 
@@ -382,6 +383,7 @@ impl JsRuntime {
       .module_loader
       .unwrap_or_else(|| Rc::new(NoopModuleLoader));
 
+    op_state.borrow_mut().put::<Arc<Mutex<Option<Waker>>>>(Arc::new(Mutex::new(None)));
     isolate.set_slot(Rc::new(RefCell::new(JsRuntimeState {
       global_realm: Some(JsRealm(global_context)),
       pending_promise_exceptions: HashMap::new(),
@@ -883,6 +885,10 @@ impl JsRuntime {
     {
       let state = state_rc.borrow();
       state.waker.register(cx.waker());
+      let op_state = self.op_state();
+      let mut op_state = op_state.borrow_mut();
+      let waker_mutex = op_state.borrow_mut::<Arc<Mutex<Option<Waker>>>>();
+      waker_mutex.lock().unwrap().replace(cx.waker().clone());
     }
 
     self.pump_v8_message_loop()?;
