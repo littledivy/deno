@@ -34,6 +34,7 @@ use futures::stream::StreamExt;
 use futures::task::AtomicWaker;
 use std::any::Any;
 use std::cell::RefCell;
+use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::c_void;
@@ -383,7 +384,7 @@ impl JsRuntime {
       .module_loader
       .unwrap_or_else(|| Rc::new(NoopModuleLoader));
 
-    op_state.borrow_mut().put::<Arc<Mutex<Option<Waker>>>>(Arc::new(Mutex::new(None)));
+    op_state.borrow_mut().put::<UnsafeCell<Option<Waker>>>(UnsafeCell::new(None));
     isolate.set_slot(Rc::new(RefCell::new(JsRuntimeState {
       global_realm: Some(JsRealm(global_context)),
       pending_promise_exceptions: HashMap::new(),
@@ -887,8 +888,8 @@ impl JsRuntime {
       state.waker.register(cx.waker());
       let op_state = self.op_state();
       let mut op_state = op_state.borrow_mut();
-      let waker_mutex = op_state.borrow_mut::<Arc<Mutex<Option<Waker>>>>();
-      waker_mutex.lock().unwrap().replace(cx.waker().clone());
+      let waker_mutex = op_state.borrow_mut::<UnsafeCell<Option<Waker>>>();
+      waker_mutex.get_mut().replace(cx.waker().clone());
     }
 
     self.pump_v8_message_loop()?;
