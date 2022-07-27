@@ -90,10 +90,18 @@ pub fn op_class(_attr: TokenStream, item: TokenStream) -> TokenStream {
           args: #core::v8::FunctionCallbackArguments,
           mut retval: #core::v8::ReturnValue,
         ) {
-          unimplemented!();
+          let this = args.this();
+          let allocated = Box::into_raw(Box::new(#name::new()));
+          let external = #core::v8::External::new(scope, allocated as *mut _);
+          this.set_internal_field(0, external.into());
+          dbg!("This worked");
         }
 
         let function_templ = #core::v8::FunctionTemplate::new(scope, constructor_callback);
+        {
+          let instance_templ = function_templ.instance_template(scope);
+          instance_templ.set_internal_field_count(1);
+        }
         function_templ.get_function(scope).unwrap()
       }
     }

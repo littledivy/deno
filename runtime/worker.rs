@@ -186,7 +186,6 @@ impl MainWorker {
     });
 
     {
-
       let ctx = js_runtime.global_context();
       let scope = &mut js_runtime.handle_scope();
 
