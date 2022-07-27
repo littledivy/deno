@@ -103,6 +103,7 @@ pub use crate::runtime::SharedArrayBufferStore;
 pub use crate::runtime::Snapshot;
 pub use crate::source_map::SourceMapGetter;
 pub use deno_ops::op;
+pub use deno_ops::op_class;
 
 pub fn v8_version() -> &'static str {
   v8::V8::get_version()

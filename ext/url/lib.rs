@@ -35,6 +35,17 @@ pub fn init() -> Extension {
     .build()
 }
 
+#[deno_core::op_class]
+impl UrlClass {
+  pub fn new() -> Self {
+    Self { a: 69 }
+  }
+}
+
+pub struct UrlClass {
+  a: u32,
+}
+
 // UrlParts is a \n joined string of the following parts:
 // #[derive(Serialize)]
 // pub struct UrlParts {

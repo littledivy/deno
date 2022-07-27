@@ -70,6 +70,37 @@ impl syn::parse::Parse for MacroArgs {
 }
 
 #[proc_macro_attribute]
+pub fn op_class(_attr: TokenStream, item: TokenStream) -> TokenStream {
+  let impl_block = syn::parse::<syn::ItemImpl>(item).unwrap();
+  // let name = match impl_block.self_ty {
+  //   syn::Type::Path(t) => t.path
+  //   _ => todo!(),
+  // }
+  let core = core_import();
+  let name = quote::format_ident!("{}", "UrlClass");
+  quote! {
+    #impl_block
+
+    impl #name {
+      pub fn decl<'s>(
+        scope: &mut #core::v8::HandleScope<'s>,
+      ) -> #core::v8::Local<'s, #core::v8::Function> {
+        pub fn constructor_callback(
+          scope: &mut #core::v8::HandleScope,
+          args: #core::v8::FunctionCallbackArguments,
+          mut retval: #core::v8::ReturnValue,
+        ) {
+          unimplemented!();
+        }
+
+        let function_templ = #core::v8::FunctionTemplate::new(scope, constructor_callback);
+        function_templ.get_function(scope).unwrap()
+      }
+    }
+  }.into()
+}
+
+#[proc_macro_attribute]
 pub fn op(attr: TokenStream, item: TokenStream) -> TokenStream {
   let margs = syn::parse_macro_input!(attr as MacroArgs);
   let MacroArgs { is_unstable, is_v8 } = margs;

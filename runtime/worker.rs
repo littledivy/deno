@@ -20,6 +20,7 @@ use deno_core::ModuleId;
 use deno_core::ModuleLoader;
 use deno_core::ModuleSpecifier;
 use deno_core::RuntimeOptions;
+use deno_core::v8;
 use deno_core::SharedArrayBufferStore;
 use deno_core::SourceMapGetter;
 use deno_tls::rustls::RootCertStore;
@@ -183,6 +184,22 @@ impl MainWorker {
       extensions,
       ..Default::default()
     });
+
+    {
+
+      let ctx = js_runtime.global_context();
+      let scope = &mut js_runtime.handle_scope();
+
+      let scope = &mut v8::EscapableHandleScope::new(scope);
+
+      let ctx = v8::Local::new(scope, ctx);
+      let scope = &mut v8::ContextScope::new(scope, ctx);
+      let obj = ctx.global(scope);
+      let key = v8::String::new(scope, "URL2").unwrap();
+      let val = deno_url::UrlClass::decl(scope);
+      
+      obj.set(scope, key.into(), val.into());
+    }
 
     if let Some(server) = options.maybe_inspector_server.clone() {
       server.register_inspector(
