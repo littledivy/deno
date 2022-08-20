@@ -56,11 +56,16 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
+mod body;
 mod chunked;
 mod request;
 #[cfg(unix)]
 mod sendfile;
 
+use body::BodyReader;
+use body::Decoder;
+use body::FixedDecoder;
+use chunked::Decoder as ChunkedDecoder;
 use request::InnerRequest;
 use request::Request;
 
@@ -97,8 +102,9 @@ enum InnerStream {
 pub struct Stream {
   inner: InnerStream,
   detached: bool,
-  read_rx: Option<mpsc::Receiver<()>>,
-  read_tx: Option<mpsc::Sender<()>>,
+  // read_rx: Option<mpsc::Receiver<()>>,
+  // read_tx: Option<mpsc::Sender<()>>,
+  body_reader: Option<BodyReader>,
   parse_done: ParseStatus,
   buffer: UnsafeCell<Vec<u8>>,
   read_lock: Arc<Mutex<()>>,
@@ -158,7 +164,7 @@ fn op_flash_respond(
   let sock = match shutdown {
     true => {
       let tx = ctx.requests.remove(&token).unwrap();
-      close = !tx.keep_alive;
+      // close = !tx.keep_alive;
       tx.socket()
     }
     // In case of a websocket upgrade or streaming response.
@@ -167,9 +173,6 @@ fn op_flash_respond(
       tx.socket()
     }
   };
-
-  sock.read_tx.take();
-  sock.read_rx.take();
 
   let _ = sock.write(&response);
   if let Some(response) = maybe_body {
@@ -308,7 +311,7 @@ fn flash_respond(
   let sock = match shutdown {
     true => {
       let tx = ctx.requests.remove(&token).unwrap();
-      close = !tx.keep_alive;
+      // close = !tx.keep_alive;
       tx.socket()
     }
     // In case of a websocket upgrade or streaming response.
@@ -318,8 +321,6 @@ fn flash_respond(
     }
   };
 
-  sock.read_tx.take();
-  sock.read_rx.take();
 
   let _ = sock.write(response);
   // server is done writing and request doesn't want to kept alive.
@@ -714,7 +715,7 @@ fn op_flash_make_request<'scope>(
 #[inline]
 fn has_body_stream(req: &Request) -> bool {
   let sock = req.socket();
-  sock.read_rx.is_some()
+  sock.body_reader.is_some()
 }
 
 #[op]
@@ -765,62 +766,16 @@ fn op_flash_first_packet(
   let tx = get_request!(op_state, server_id, token);
   let sock = tx.socket();
 
-  if !tx.te_chunked && tx.content_length.is_none() {
-    return Ok(None);
-  }
-
-  if tx.expect_continue {
-    let _ = sock.write(b"HTTP/1.1 100 Continue\r\n\r\n");
-    tx.expect_continue = false;
-  }
-
   let buffer = &tx.inner.buffer[tx.inner.body_offset..tx.inner.body_len];
-  // Oh there is nothing here.
-  if buffer.is_empty() {
-    return Ok(Some(ZeroCopyBuf::empty()));
-  }
 
-  if tx.te_chunked {
-    let mut buf = vec![0; 1024];
-    let mut offset = 0;
-    let mut decoder = chunked::Decoder::new(
-      std::io::Cursor::new(buffer),
-      tx.remaining_chunk_size,
-    );
+  let mut packet = buffer.to_vec();
 
-    loop {
-      match decoder.read(&mut buf[offset..]) {
-        Ok(n) => {
-          tx.remaining_chunk_size = decoder.remaining_chunks_size;
-          offset += n;
-
-          if n == 0 {
-            tx.te_chunked = false;
-            buf.truncate(offset);
-            return Ok(Some(buf.into()));
-          }
-
-          if offset < buf.len()
-            && decoder.source.position() < buffer.len() as u64
-          {
-            continue;
-          }
-
-          buf.truncate(offset);
-          return Ok(Some(buf.into()));
-        }
-        Err(e) => {
-          return Err(type_error(format!("{}", e)));
-        }
-      }
-    }
-  }
-
-  tx.content_length
-    .ok_or_else(|| type_error("no content-length"))?;
-  tx.content_read += buffer.len();
-
-  Ok(Some(buffer.to_vec().into()))
+  // while let Ok(mut r) = sock.body_reader.as_mut().unwrap().read_rx.try_recv() {
+  //   packet.append(&mut r.into());
+  //  }
+  
+  // decoder.content_read += buffer.len();
+  Ok(Some(packet.into()))
 }
 
 #[op]
@@ -843,48 +798,16 @@ async fn op_flash_read_body(
   };
   let tx = ctx.requests.get_mut(&token).unwrap();
 
-  if tx.te_chunked {
-    let mut decoder =
-      chunked::Decoder::new(tx.socket(), tx.remaining_chunk_size);
-    loop {
-      let sock = tx.socket();
+  let socket = tx.socket();
+  if let Some(reader) = &mut socket.body_reader {
 
-      let _lock = sock.read_lock.lock().unwrap();
-      match decoder.read(&mut buf) {
-        Ok(n) => {
-          tx.remaining_chunk_size = decoder.remaining_chunks_size;
-          return n;
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => {
-          panic!("chunked read error: {}", e);
-        }
-        Err(_) => {
-          drop(_lock);
-          sock.read_rx.as_mut().unwrap().recv().await.unwrap();
-        }
-      }
-    }
-  }
+    dbg!("Starting read");
+    let read = reader.read().await.unwrap();
 
-  if let Some(content_length) = tx.content_length {
-    let sock = tx.socket();
-    let l = sock.read_lock.clone();
-
-    loop {
-      let _lock = l.lock().unwrap();
-      if tx.content_read >= content_length as usize {
-        return 0;
-      }
-      match sock.read(&mut buf) {
-        Ok(n) => {
-          tx.content_read += n;
-          return n;
-        }
-        _ => {
-          drop(_lock);
-          sock.read_rx.as_mut().unwrap().recv().await.unwrap();
-        }
-      }
+    dbg!(read.len());
+    if read.len() != 0 {
+      buf[..read.len()].copy_from_slice(&read);
+      return read.len();
     }
   }
 
@@ -1016,8 +939,7 @@ fn run_server(
               let stream = Box::pin(Stream {
                 inner: socket,
                 detached: false,
-                read_rx: None,
-                read_tx: None,
+                body_reader: None,
                 read_lock: Arc::new(Mutex::new(())),
                 parse_done: ParseStatus::None,
                 buffer: UnsafeCell::new(vec![0_u8; 1024]),
@@ -1059,14 +981,40 @@ fn run_server(
           debug_assert!(event.is_readable());
 
           trace!("Socket readable: {}", token.0);
-          if let Some(tx) = &socket.read_tx {
-            {
-              let _l = socket.read_lock.lock().unwrap();
+          if let Some(reader) = &mut socket.body_reader {
+            trace!("Reading body: {}", token.0);
+            match reader.decoder {
+              Decoder::Fixed(FixedDecoder {
+                content_length,
+                mut content_read,
+              }) => loop {
+                if content_read >= content_length {
+                  let _ = reader.read_tx.blocking_send(vec![].into_boxed_slice());
+                  dbg!("End");
+                  reader.decoder = Decoder::None;
+                  continue 'events;
+                }
+        
+                match (unsafe { &mut *(sock_ptr as *mut Stream) }).read(&mut reader.backing_buf) {
+                  Ok(n) => {
+                    if n == 0 {
+                      reader.decoder = Decoder::None;
+                      let _ = reader.read_tx.blocking_send(vec![].into_boxed_slice());
+                      dbg!("End");
+                      continue 'events;
+                    }
+                    content_read += n;
+                    let _ = reader.read_tx.blocking_send(reader.backing_buf[..n].to_vec().into_boxed_slice());
+                    dbg!(n);
+                  }
+                  _ => {
+                    continue 'events;
+                  },
+                }
+              },
+              Decoder::Chunked(_decoder) => {}
+              Decoder::None => {}
             }
-            trace!("Sending readiness notification: {}", token.0);
-            let _ = tx.blocking_send(());
-
-            continue;
           }
 
           let mut headers = vec![httparse::EMPTY_HEADER; 40];
@@ -1116,13 +1064,6 @@ fn run_server(
           }
 
           debug_assert_eq!(socket.parse_done, ParseStatus::None);
-          if let Some(method) = &req.method {
-            if method == &"POST" || method == &"PUT" {
-              let (tx, rx) = mpsc::channel(100);
-              socket.read_tx = Some(tx);
-              socket.read_rx = Some(rx);
-            }
-          }
 
           // SAFETY: It is safe for the read buf to be mutable here.
           let buffer = unsafe { &mut *socket.buffer.get() };
@@ -1211,16 +1152,29 @@ fn run_server(
             continue 'events;
           }
 
+          if let Some(method) = &inner_req.req.method {
+            if method == &"POST" || method == &"PUT" {
+             let decoder = if te_chunked {
+                // Decoder::Chunked(ChunkedDecoder::new())
+                todo!()
+              } else {
+                content_length.map(|len| Decoder::Fixed(FixedDecoder {
+                  content_length: len as usize,
+                  content_read: 0,
+                })).unwrap_or(Decoder::None)
+              };
+              socket.body_reader = Some(BodyReader::new(keep_alive, decoder));
+
+              if expect_continue {
+                let _ = socket.write(b"HTTP/1.1 100 Continue\r\n\r\n");
+              }
+            }
+          }
+
           tx.blocking_send(Request {
             socket: sock_ptr,
             // SAFETY: headers backing buffer outlives the mio event loop ('static)
             inner: inner_req,
-            keep_alive,
-            te_chunked,
-            remaining_chunk_size: None,
-            content_read: 0,
-            content_length,
-            expect_continue,
           })
           .ok();
         }

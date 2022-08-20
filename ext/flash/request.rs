@@ -23,12 +23,6 @@ pub struct Request {
   // Dereferencing is safe until server thread finishes and
   // op_flash_serve resolves or websocket upgrade is performed.
   pub socket: *mut Stream,
-  pub keep_alive: bool,
-  pub content_read: usize,
-  pub content_length: Option<u64>,
-  pub remaining_chunk_size: Option<usize>,
-  pub te_chunked: bool,
-  pub expect_continue: bool,
 }
 
 // SAFETY: Sent from server thread to JS thread.

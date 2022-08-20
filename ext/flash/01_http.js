@@ -385,7 +385,7 @@
                 if (hasBody && body[_state] !== "closed") {
                   // TODO(@littledivy): Optimize by draining in a single op.
                   try {
-                    await req.arrayBuffer();
+                    // await req.arrayBuffer();
                   } catch { /* pass */ }
                 }
               }
