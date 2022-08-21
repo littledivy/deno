@@ -945,7 +945,27 @@ fn run_server(
   maybe_cert: Option<String>,
   maybe_key: Option<String>,
 ) -> Result<(), AnyError> {
+
   let mut listener = TcpListener::bind(addr)?;
+
+  #[cfg(unix)]
+  {
+    use std::os::unix::prelude::AsRawFd;
+    use std::mem::size_of_val;
+    // set SO_REUSEPORT
+    // SAFETY: call to libc::setsockopt
+    unsafe {
+      let optval: libc::c_int = 1;
+      libc::setsockopt(
+          listener.as_raw_fd(),
+          libc::SOL_SOCKET,
+          libc::SO_REUSEPORT,
+          &optval as *const _ as *const libc::c_void,
+          size_of_val(&optval) as libc::socklen_t,
+      );
+    }
+  }
+  dbg!(addr);
   let mut poll = Poll::new()?;
   let token = Token(0);
   poll
