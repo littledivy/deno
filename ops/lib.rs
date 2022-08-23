@@ -312,17 +312,37 @@ fn codegen_fast_impl(
         .inputs
         .iter()
         .skip(if use_recv { 1 } else { 0 })
+        .enumerate()
+        .map(|(idx, arg)| {
+          let ident = match arg {
+            FnArg::Receiver(_) => unreachable!(),
+            FnArg::Typed(t) => match &*t.pat {
+              syn::Pat::Ident(i) => format_ident!("{}", i.ident),
+              _ => unreachable!(),
+            },
+          };
+          if use_fast_cb_opts && idx == f.sig.inputs.len() - 1 {  
+            return quote! { #ident: *const #core::v8::fast_api::FastApiCallbackOptions };
+          }
+          quote!(#arg)
+        })
         .collect::<Vec<_>>();
       let input_idents = f
         .sig
         .inputs
         .iter()
-        .map(|a| match a {
+        .enumerate()
+        .map(|(idx, a)| {
+          let ident = match a {
           FnArg::Receiver(_) => unreachable!(),
           FnArg::Typed(t) => match &*t.pat {
             syn::Pat::Ident(i) => format_ident!("{}", i.ident),
             _ => unreachable!(),
-          },
+          }};
+          if use_fast_cb_opts && idx == f.sig.inputs.len() - 1 {
+            return quote! { Some(unsafe { &* #ident }) };
+          }
+          quote! { #ident }
         })
         .collect::<Vec<_>>();
       let generics = &f.sig.generics;
@@ -591,9 +611,15 @@ fn codegen_arg(
 ) -> TokenStream2 {
   let ident = quote::format_ident!("{name}");
   let pat = match arg {
-    syn::FnArg::Typed(pat) => &pat.pat,
+    syn::FnArg::Typed(pat) => {
+      if is_optional_fast_callback_option(&pat.ty) {
+        return quote! { let #ident = None; };
+      }
+      &pat.pat
+    },
     _ => unreachable!(),
   };
+  
   // Fast path if arg should be skipped
   if matches!(**pat, syn::Pat::Wild(_)) {
     return quote! { let #ident = (); };
