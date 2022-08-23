@@ -304,6 +304,7 @@ fn codegen_fast_impl(
       args,
       ret,
       use_recv,
+      use_fast_cb_opts,
     }) = fast_info
     {
       let inputs = &f
@@ -436,6 +437,7 @@ struct FastApiSyn {
   args: TokenStream2,
   ret: TokenStream2,
   use_recv: bool,
+  use_fast_cb_opts: bool,
 }
 
 fn can_be_fast_api(core: &TokenStream2, f: &syn::ItemFn) -> Option<FastApiSyn> {
@@ -454,10 +456,17 @@ fn can_be_fast_api(core: &TokenStream2, f: &syn::ItemFn) -> Option<FastApiSyn> {
   };
 
   let mut use_recv = false;
+  let mut use_fast_cb_opts = false;
   let mut args = vec![quote! { #core::v8::fast_api::Type::V8Value }];
   for (pos, input) in inputs.iter().enumerate() {
     if pos == 0 && is_mut_ref_opstate(input) {
       use_recv = true;
+      continue;
+    }
+
+    if pos == inputs.len() - 1 && is_optional_fast_callback_option(input) {
+      args.push(quote! { #core::v8::fast_api::Type::CallbackOptions });
+      use_fast_cb_opts = true;
       continue;
     }
 
@@ -489,6 +498,7 @@ fn can_be_fast_api(core: &TokenStream2, f: &syn::ItemFn) -> Option<FastApiSyn> {
     args: args.parse().unwrap(),
     ret,
     use_recv,
+    use_fast_cb_opts,
   })
 }
 
@@ -716,6 +726,10 @@ fn is_handle_scope(arg: &syn::FnArg) -> bool {
 
 fn is_future(ty: impl ToTokens) -> bool {
   tokens(&ty).contains("impl Future < Output =")
+}
+
+fn is_optional_fast_callback_option(ty: impl ToTokens) -> bool {
+  tokens(&ty).contains("Option < & FastApiCallbackOptions")
 }
 
 fn tokens(x: impl ToTokens) -> String {

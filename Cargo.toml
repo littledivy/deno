@@ -21,6 +21,7 @@ members = [
   "ext/net",
   "ext/node",
   "ext/url",
+  "ext/wasi",
   "ext/web",
   "ext/webgpu",
   "ext/webidl",
