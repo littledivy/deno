@@ -115,6 +115,21 @@ impl Stream {
   fn reattach_ownership(&mut self) {
     self.detached = false;
   }
+
+  #[inline]
+  fn try_write(&mut self, buf: &[u8]) -> u32 {
+    let mut nwritten = 0;
+    while nwritten < buf.len() {
+      match self.write(&buf[nwritten..]) {
+        Ok(n) => nwritten += n,
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+          break;
+        }
+        Err(_) => {},
+      }
+    }
+    (buf.len() - nwritten) as u32
+  }
 }
 
 impl Write for Stream {
@@ -152,7 +167,7 @@ fn op_flash_respond(
   response: StringOrBuffer,
   maybe_body: Option<ZeroCopyBuf>,
   shutdown: bool,
-) {
+)  {
   let flash_ctx = op_state.borrow_mut::<FlashContext>();
   let ctx = flash_ctx.servers.get_mut(&server_id).unwrap();
 
@@ -173,26 +188,26 @@ fn op_flash_respond(
   sock.read_tx.take();
   sock.read_rx.take();
 
-  let _ = sock.write(&response);
+  sock.write_all(&response);
+  dbg!(String::from_utf8_lossy(&response));
   if let Some(response) = maybe_body {
-    let _ = sock.write(format!("{:x}", response.len()).as_bytes());
-    let _ = sock.write(b"\r\n");
-    let _ = sock.write(&response);
-    let _ = sock.write(b"\r\n");
+    let _ = sock.write_all(format!("{:x}", response.len()).as_bytes());
+    let _ = sock.write_all(b"\r\n");
+    let _ = sock.write_all(&response);
+    let _ = sock.write_all(b"\r\n");
   }
-
-  // server is done writing and request doesn't want to kept alive.
-  if shutdown && close {
-    match &mut sock.inner {
-      InnerStream::Tcp(stream) => {
-        // Typically shutdown shouldn't fail.
-        let _ = stream.shutdown(std::net::Shutdown::Both);
-      }
-      InnerStream::Tls(stream) => {
-        let _ = stream.sock.shutdown(std::net::Shutdown::Both);
-      }
-    }
-  }
+  // // server is done writing and request doesn't want to kept alive.
+  // if shutdown && close {
+  //   match &mut sock.inner {
+  //     InnerStream::Tcp(stream) => {
+  //       // Typically shutdown shouldn't fail.
+  //       let _ = stream.shutdown(std::net::Shutdown::Both);
+  //     }
+  //     InnerStream::Tls(stream) => {
+  //       let _ = stream.sock.shutdown(std::net::Shutdown::Both);
+  //     }
+  //   }
+  // }
 }
 
 #[op]
@@ -323,7 +338,7 @@ fn flash_respond(
   sock.read_tx.take();
   sock.read_rx.take();
 
-  let _ = sock.write(response);
+  sock.try_write(response);
   // server is done writing and request doesn't want to kept alive.
   if shutdown && close {
     match &mut sock.inner {
@@ -414,7 +429,7 @@ fn respond_chunked(
   };
 
   if let Some(response) = response {
-    let _ = sock.write(format!("{:x}", response.len()).as_bytes());
+    let _ = sock.write_all(format!("{:x}", response.len()).as_bytes());
     let _ = sock.write(b"\r\n");
     let _ = sock.write(response);
     let _ = sock.write(b"\r\n");
@@ -1092,7 +1107,7 @@ fn run_server(
               Ok(0) => {
                 trace!("Socket closed: {}", token.0);
                 // FIXME: don't remove while JS is writing!
-                // sockets.remove(&token);
+                sockets.remove(&token);
                 continue 'events;
               }
               Ok(read) => match req.parse(&buffer[..offset + read]) {
