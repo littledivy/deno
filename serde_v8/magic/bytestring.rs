@@ -7,6 +7,15 @@ use std::mem::size_of;
 
 const USIZE2X: usize = size_of::<usize>() * 2;
 
+// https://github.com/nodejs/node/blob/642ea2b668c12773c371b333926ccc10070ef2cb/src/string_bytes.cc#L32-L35
+// When creating strings >= this length v8's gc spins up and consumes
+// most of the execution time. For these cases it's more performant to
+// use external string resources.
+//
+// TODO(@littledivy): Not sure where this threshold came from. The linked commit is from 2013, but it seems
+// to work well :)
+const EXTERN_APEX: usize = 0xFBEE9;
+
 #[derive(
   PartialEq,
   Eq,
@@ -35,6 +44,12 @@ impl ToV8 for ByteString {
     &self,
     scope: &mut v8::HandleScope<'a>,
   ) -> Result<v8::Local<'a, v8::Value>, crate::Error> {
+    if self.len() > EXTERN_APEX {
+      let bytes: &[u8] = self.as_ref();
+      let v = v8::String::new_external_onebyte_static(scope, unsafe { std::mem::transmute(bytes) })
+        .unwrap(); 
+      return Ok(v.into());
+    }
     let v =
       v8::String::new_from_one_byte(scope, self, v8::NewStringType::Normal)
         .unwrap();
