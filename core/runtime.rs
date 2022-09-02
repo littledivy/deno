@@ -23,7 +23,6 @@ use crate::Extension;
 use crate::OpMiddlewareFn;
 use crate::OpResult;
 use crate::OpState;
-use crate::PromiseId;
 use anyhow::Error;
 use futures::channel::oneshot;
 use futures::future::poll_fn;
@@ -47,7 +46,7 @@ use std::task::Context;
 use std::task::Poll;
 
 type PendingOpFuture =
-  OpCall<(v8::Global<v8::Context>, PromiseId, OpId, OpResult)>;
+  OpCall<(v8::Global<v8::Context>, v8::Global<v8::Function>, OpId, OpResult)>;
 
 pub enum Snapshot {
   Static(&'static [u8]),
@@ -1875,7 +1874,7 @@ impl JsRuntime {
 
     // We keep a list of promise IDs and OpResults per realm. Since v8::Context
     // isn't hashable, `results_per_realm` is a vector of (context, list) tuples
-    type ResultList = Vec<(i32, OpResult)>;
+    type ResultList = Vec<(v8::Global<v8::Function>, OpResult)>;
     let mut results_per_realm: Vec<(v8::Global<v8::Context>, ResultList)> = {
       let known_realms = &mut state_rc.borrow_mut().known_realms;
       let mut results = Vec::with_capacity(known_realms.len());
@@ -1913,11 +1912,11 @@ impl JsRuntime {
             break;
           }
         }
-        JsRealm::new(context)
-          .state(self.v8_isolate())
-          .borrow_mut()
-          .unrefed_ops
-          .remove(&promise_id);
+        // JsRealm::new(context)
+        //   .state(self.v8_isolate())
+        //   .borrow_mut()
+        //   .unrefed_ops
+        //   .remove(&promise_id);
       }
     }
 
@@ -1927,33 +1926,15 @@ impl JsRuntime {
       }
 
       let realm = JsRealm::new(context);
-      let js_recv_cb_handle = realm
-        .state(self.v8_isolate())
-        .borrow()
-        .js_recv_cb
-        .clone()
-        .unwrap();
       let scope = &mut realm.handle_scope(self.v8_isolate());
 
-      // We return async responses to JS in unbounded batches (may change),
-      // each batch is a flat vector of tuples:
-      // `[promise_id1, op_result1, promise_id2, op_result2, ...]`
-      // promise_id is a simple integer, op_result is an ops::OpResult
-      // which contains a value OR an error, encoded as a tuple.
-      // This batch is received in JS via the special `arguments` variable
-      // and then each tuple is used to resolve or reject promises
-      let mut args = vec![];
-
-      for (promise_id, mut resp) in results.into_iter() {
-        args.push(v8::Integer::new(scope, promise_id).into());
-        args.push(resp.to_v8(scope).unwrap());
-      }
-
       let tc_scope = &mut v8::TryCatch::new(scope);
-      let js_recv_cb = js_recv_cb_handle.open(tc_scope);
       let this = v8::undefined(tc_scope).into();
-      js_recv_cb.call(tc_scope, this, args.as_slice());
-
+      for (resolver, mut resp) in results.into_iter() {
+        let resolver = resolver.open(tc_scope);
+        let x = resp.to_v8(tc_scope).unwrap();
+        resolver.call(tc_scope, this, &[x]);        
+      }
       if let Some(exception) = tc_scope.exception() {
         return exception_to_err_result(tc_scope, exception, false);
       }
@@ -2154,13 +2135,28 @@ impl JsRealm {
 
 #[inline]
 pub fn queue_async_op(
-  scope: &v8::Isolate,
-  op: impl Future<Output = (v8::Global<v8::Context>, PromiseId, OpId, OpResult)>
+  scope: &mut v8::HandleScope,
+  op: impl Future<Output = (v8::Global<v8::Context>, v8::Global<v8::Function>, OpId, OpResult)>
     + 'static,
 ) {
+  let boxed = Box::pin(op) as std::pin::Pin<Box<dyn Future<Output = (v8::Global<v8::Context>, v8::Global<v8::Function>, OpId, OpResult)>>>;
+  
+  let mut inner = futures::future::maybe_done(boxed);
+  let waker = futures::task::noop_waker();
+  let mut cx = Context::from_waker(&waker);
+  let mut pinned = std::pin::Pin::new(&mut inner);
+  if pinned.as_mut().poll(&mut cx).is_ready() {
+    let mut value = pinned.as_mut().take_output().unwrap();
+    let this = v8::undefined(scope).into();
+    let resolver = value.1.open(scope);
+    let x = value.3.to_v8(scope).unwrap();
+    resolver.call(scope, this, &[x]);
+    return;
+  }
+
   let state_rc = JsRuntime::state(scope);
   let mut state = state_rc.borrow_mut();
-  state.pending_ops.push(OpCall::eager(op));
+  state.pending_ops.push(OpCall(inner));
   state.have_unpolled_ops = true;
 }
 

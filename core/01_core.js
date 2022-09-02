@@ -111,7 +111,7 @@
     for (let i = 0; i < arguments.length; i += 2) {
       const promiseId = arguments[i];
       const res = arguments[i + 1];
-      const promise = getPromise(promiseId);
+      const promise = getPromise(promiseId); 
       promise.resolve(res);
     }
   }
@@ -159,24 +159,11 @@
   }
 
   function opAsync(opName, ...args) {
-    const promiseId = nextPromiseId++;
-    const maybeError = ops[opName](promiseId, ...args);
+    const p = newPromise();
+    const maybeError = ops[opName](p.resolve, ...args);
     // Handle sync error (e.g: error parsing args)
     if (maybeError) return unwrapOpResult(maybeError);
-    let p = PromisePrototypeThen(setPromise(promiseId), unwrapOpResult);
-    if (opCallTracingEnabled) {
-      // Capture a stack trace by creating a new `Error` object. We remove the
-      // first 6 characters (the `Error\n` prefix) to get just the stack trace.
-      const stack = StringPrototypeSlice(new Error().stack, 6);
-      MapPrototypeSet(opCallTraces, promiseId, { opName, stack });
-      p = PromisePrototypeFinally(
-        p,
-        () => MapPrototypeDelete(opCallTraces, promiseId),
-      );
-    }
-    // Save the id on the promise so it can later be ref'ed or unref'ed
-    p[promiseIdSymbol] = promiseId;
-    return p;
+    return PromisePrototypeThen(p, unwrapOpResult);
   }
 
   function opSync(opName, ...args) {

@@ -26,7 +26,7 @@ use std::task::Poll;
 /// Background: ops are stored in a `FuturesUnordered` structure which polls
 /// them, but without the `OpCall` wrapper this doesn't happen until the next
 /// turn of the event loop, which is too late for certain ops.
-pub struct OpCall<T>(MaybeDone<Pin<Box<dyn Future<Output = T>>>>);
+pub struct OpCall<T>(pub(crate) MaybeDone<Pin<Box<dyn Future<Output = T>>>>);
 
 impl<T> OpCall<T> {
   /// Wraps a future, and polls the inner future immediately.

@@ -207,7 +207,7 @@ fn codegen_v8_async(
         quote! {
           let result = match result {
             Ok(fut) => fut.await,
-            Err(e) => return (context, promise_id, op_id, #core::_ops::to_op_result::<()>(get_class, Err(e))),
+            Err(e) => return (context, promise, op_id, #core::_ops::to_op_result::<()>(get_class, Err(e))),
           };
         }
       } else {
@@ -226,18 +226,19 @@ fn codegen_v8_async(
     };
     let op_id = ctx.id;
 
-    let promise_id = args.get(0);
-    let promise_id = #core::v8::Local::<#core::v8::Integer>::try_from(promise_id)
-      .map(|l| l.value() as #core::PromiseId)
-      .map_err(#core::anyhow::Error::from);
-    // Fail if promise id invalid (not an int)
-    let promise_id: #core::PromiseId = match promise_id {
-      Ok(promise_id) => promise_id,
-      Err(err) => {
-        #core::_ops::throw_type_error(scope, format!("invalid promise id: {}", err));
-        return;
-      }
-    };
+    let promise: #core::v8::Local<#core::v8::Function> = args.get(0).try_into().unwrap();
+    let promise = #core::v8::Global::new(scope, promise);
+    // let promise_id = #core::v8::Local::<#core::v8::Integer>::try_from(promise_id)
+    //   .map(|l| l.value() as #core::PromiseId)
+    //   .map_err(#core::anyhow::Error::from);
+    // // Fail if promise id invalid (not an int)
+    // let promise_id: #core::PromiseId = match promise_id {
+    //   Ok(promise_id) => promise_id,
+    //   Err(err) => {
+    //     #core::_ops::throw_type_error(scope, format!("invalid promise id: {}", err));
+    //     return;
+    //   }
+    // };
 
     #arg_decls
 
@@ -256,10 +257,11 @@ fn codegen_v8_async(
     };
 
     #pre_result
+    
     #core::_ops::queue_async_op(scope, async move {
       let result = #result_fut
       #result_wrapper
-      (context, promise_id, op_id, #core::_ops::to_op_result(get_class, result))
+      (context, promise, op_id, #core::_ops::to_op_result(get_class, result))
     });
   }
 }
