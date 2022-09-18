@@ -477,7 +477,7 @@ pub async fn run_benchmarks(
   flags: Flags,
   bench_flags: BenchFlags,
 ) -> Result<(), AnyError> {
-  let ps = ProcState::build(flags).await?;
+  let ps = ProcState::build(flags)?;
   let permissions =
     Permissions::from_options(&ps.options.permissions_options())?;
   let specifiers = collect_specifiers(
@@ -510,7 +510,7 @@ pub async fn run_benchmarks_with_watch(
   flags: Flags,
   bench_flags: BenchFlags,
 ) -> Result<(), AnyError> {
-  let ps = ProcState::build(flags).await?;
+  let ps = ProcState::build(flags)?;
   let permissions =
     Permissions::from_options(&ps.options.permissions_options())?;
 

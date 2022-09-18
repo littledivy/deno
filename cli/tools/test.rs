@@ -1294,7 +1294,7 @@ pub async fn run_tests(
   flags: Flags,
   test_flags: TestFlags,
 ) -> Result<(), AnyError> {
-  let ps = ProcState::build(flags).await?;
+  let ps = ProcState::build(flags)?;
   let permissions =
     Permissions::from_options(&ps.options.permissions_options())?;
   let specifiers_with_mode = fetch_specifiers_with_test_mode(
@@ -1335,7 +1335,7 @@ pub async fn run_tests_with_watch(
   flags: Flags,
   test_flags: TestFlags,
 ) -> Result<(), AnyError> {
-  let ps = ProcState::build(flags).await?;
+  let ps = ProcState::build(flags)?;
   let permissions =
     Permissions::from_options(&ps.options.permissions_options())?;
 

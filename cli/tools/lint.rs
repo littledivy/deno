@@ -75,7 +75,7 @@ pub async fn lint(flags: Flags, lint_flags: LintFlags) -> Result<(), AnyError> {
   let mut include_files = args.clone();
   let mut exclude_files = ignore.clone();
 
-  let ps = ProcState::build(flags).await?;
+  let ps = ProcState::build(flags)?;
   let maybe_lint_config = ps.options.to_lint_config()?;
 
   if let Some(lint_config) = maybe_lint_config.as_ref() {

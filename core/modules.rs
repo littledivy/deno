@@ -476,7 +476,8 @@ impl RecursiveModuleLoad {
       }
     };
 
-    self
+    let start = std::time::Instant::now();
+    let r = self
       .loader
       .prepare_load(
         op_state,
@@ -484,7 +485,10 @@ impl RecursiveModuleLoad {
         maybe_referrer,
         self.is_dynamic_import(),
       )
-      .await
+      .await;
+
+    println!("prepare ms {}", start.elapsed().as_millis());
+    r
   }
 
   fn is_currently_loading_main_module(&self) -> bool {

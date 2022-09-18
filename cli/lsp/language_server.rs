@@ -2811,7 +2811,7 @@ impl Inner {
       cli_options: CliOptions,
       roots: Vec<(ModuleSpecifier, ModuleKind)>,
     ) -> Result<(), AnyError> {
-      let ps = ProcState::from_options(Arc::new(cli_options)).await?;
+      let ps = ProcState::from_options(Arc::new(cli_options))?;
       let graph = ps.create_graph(roots).await?;
       graph_valid(&graph, true, false)?;
       Ok(())

@@ -55,8 +55,11 @@ impl CliMainWorker {
   }
 
   pub async fn run(&mut self) -> Result<i32, AnyError> {
+    // let start = std::time::Instant::now();
     let mut maybe_coverage_collector =
       self.maybe_setup_coverage_collector().await?;
+
+    
     log::debug!("main_module {}", self.main_module);
 
     if self.is_main_cjs {
@@ -69,9 +72,9 @@ impl CliMainWorker {
     } else {
       self.execute_main_module_possibly_with_npm().await?;
     }
-
+    // println!("{}ms", start.elapsed().as_millis());
     self.worker.dispatch_load_event(&located_script_name!())?;
-
+    
     loop {
       self
         .worker
@@ -86,7 +89,6 @@ impl CliMainWorker {
     }
 
     self.worker.dispatch_unload_event(&located_script_name!())?;
-
     if let Some(coverage_collector) = maybe_coverage_collector.as_mut() {
       self
         .worker
@@ -282,7 +284,10 @@ impl CliMainWorker {
   async fn execute_main_module_possibly_with_npm(
     &mut self,
   ) -> Result<(), AnyError> {
+    // let start = std::time::Instant::now();
     let id = self.worker.preload_main_module(&self.main_module).await?;
+    // println!("preload_main_module({}ms)", start.elapsed().as_millis());
+    
     self.evaluate_module_possibly_with_npm(id).await
   }
 

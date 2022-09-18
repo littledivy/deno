@@ -102,14 +102,14 @@ impl Deref for ProcState {
 }
 
 impl ProcState {
-  pub async fn build(flags: Flags) -> Result<Self, AnyError> {
-    Self::from_options(Arc::new(CliOptions::from_flags(flags)?)).await
+  pub fn build(flags: Flags) -> Result<Self, AnyError> {
+    Self::from_options(Arc::new(CliOptions::from_flags(flags)?))
   }
 
-  pub async fn from_options(
+  pub fn from_options(
     options: Arc<CliOptions>,
   ) -> Result<Self, AnyError> {
-    Self::build_with_sender(options, None).await
+    Self::build_with_sender(options, None)
   }
 
   pub async fn build_for_file_watcher(
@@ -119,8 +119,7 @@ impl ProcState {
     // resolve the config each time
     let cli_options = Arc::new(CliOptions::from_flags(flags)?);
     let ps =
-      Self::build_with_sender(cli_options, Some(files_to_watch_sender.clone()))
-        .await?;
+      Self::build_with_sender(cli_options, Some(files_to_watch_sender.clone()))?;
 
     // Add the extra files listed in the watch flag
     if let Some(watch_paths) = ps.options.watch_paths() {
@@ -138,7 +137,7 @@ impl ProcState {
     Ok(ps)
   }
 
-  async fn build_with_sender(
+  fn build_with_sender(
     cli_options: Arc<CliOptions>,
     maybe_sender: Option<tokio::sync::mpsc::UnboundedSender<Vec<PathBuf>>>,
   ) -> Result<Self, AnyError> {
@@ -172,16 +171,17 @@ impl ProcState {
 
     let maybe_import_map =
       if let Some(import_map_specifier) = maybe_import_map_specifier {
-        let file = file_fetcher
-          .fetch(&import_map_specifier, &mut Permissions::allow_all())
-          .await
-          .context(format!(
-            "Unable to load '{}' import map",
-            import_map_specifier
-          ))?;
-        let import_map =
-          import_map_from_text(&import_map_specifier, &file.source)?;
-        Some(Arc::new(import_map))
+        // let file = file_fetcher
+        //   .fetch(&import_map_specifier, &mut Permissions::allow_all())
+        //   .await
+        //   .context(format!(
+        //     "Unable to load '{}' import map",
+        //     import_map_specifier
+        //   ))?;
+        // let import_map =
+        //   import_map_from_text(&import_map_specifier, &file.source)?;
+        // Some(Arc::new(import_map))
+        todo!()
       } else {
         None
       };
@@ -384,7 +384,7 @@ impl ProcState {
         None
       };
 
-    let analyzer = self.parsed_source_cache.as_analyzer();
+    // let analyzer = self.parsed_source_cache.as_analyzer();
     let graph = create_graph(
       roots.clone(),
       is_dynamic,
@@ -392,10 +392,16 @@ impl ProcState {
       &mut loader,
       maybe_resolver,
       maybe_locker,
-      Some(&*analyzer),
+      None, // Some(&*analyzer),
       maybe_file_watcher_reporter,
     )
     .await;
+
+    if graph.imports.is_empty() {
+      let mut graph_data = self.graph_data.write();
+      graph_data.add_graph(&graph, reload_on_watch);
+      return Ok(());
+    }
 
     // If there was a locker, validate the integrity of all the modules in the
     // locker.

@@ -239,7 +239,7 @@ async fn compile_command(
   )?;
 
   let module_specifier = resolve_url_or_path(&compile_flags.source_file)?;
-  let ps = ProcState::build(flags).await?;
+  let ps = ProcState::build(flags)?;
   let deno_dir = &ps.dir;
 
   let output_path =
@@ -296,7 +296,7 @@ async fn info_command(
   flags: Flags,
   info_flags: InfoFlags,
 ) -> Result<i32, AnyError> {
-  let ps = ProcState::build(flags).await?;
+  let ps = ProcState::build(flags)?;
   if let Some(specifier) = info_flags.file {
     let specifier = resolve_url_or_path(&specifier)?;
     let graph = ps
@@ -324,7 +324,7 @@ async fn install_command(
   preload_flags.inspect_brk = None;
   let permissions =
     Permissions::from_options(&preload_flags.permissions_options())?;
-  let ps = ProcState::build(preload_flags).await?;
+  let ps = ProcState::build(preload_flags)?;
   let main_module = resolve_url_or_path(&install_flags.module_url)?;
   let mut worker = create_main_worker(
     &ps,
@@ -369,7 +369,7 @@ async fn cache_command(
   flags: Flags,
   cache_flags: CacheFlags,
 ) -> Result<i32, AnyError> {
-  let ps = ProcState::build(flags).await?;
+  let ps = ProcState::build(flags)?;
   load_and_type_check(&ps, &cache_flags.files).await?;
   ps.cache_module_emits()?;
   Ok(0)
@@ -379,7 +379,7 @@ async fn check_command(
   flags: Flags,
   check_flags: CheckFlags,
 ) -> Result<i32, AnyError> {
-  let ps = ProcState::build(flags).await?;
+  let ps = ProcState::build(flags)?;
   load_and_type_check(&ps, &check_flags.files).await?;
   Ok(0)
 }
@@ -415,7 +415,7 @@ async fn eval_command(
   let main_module =
     resolve_url_or_path(&format!("./$deno$eval.{}", eval_flags.ext))?;
   let permissions = Permissions::from_options(&flags.permissions_options())?;
-  let ps = ProcState::build(flags).await?;
+  let ps = ProcState::build(flags)?;
   let mut worker = create_main_worker(
     &ps,
     main_module.clone(),
@@ -568,7 +568,7 @@ async fn bundle_command(
       let module_specifier = resolve_url_or_path(&source_file1)?;
 
       debug!(">>>>> bundle START");
-      let ps = ProcState::from_options(cli_options).await?;
+      let ps = ProcState::from_options(cli_options)?;
       let graph =
         create_graph_and_maybe_check(module_specifier, &ps, debug).await?;
 
@@ -698,7 +698,7 @@ async fn repl_command(
   repl_flags: ReplFlags,
 ) -> Result<i32, AnyError> {
   let main_module = resolve_url_or_path("./$deno$repl.ts").unwrap();
-  let ps = ProcState::build(flags).await?;
+  let ps = ProcState::build(flags)?;
   let mut worker = create_main_worker(
     &ps,
     main_module.clone(),
@@ -718,7 +718,7 @@ async fn repl_command(
 }
 
 async fn run_from_stdin(flags: Flags) -> Result<i32, AnyError> {
-  let ps = ProcState::build(flags).await?;
+  let ps = ProcState::build(flags)?;
   let main_module = resolve_url_or_path("./$deno$stdin.ts").unwrap();
   let mut worker = create_main_worker(
     &ps.clone(),
@@ -796,7 +796,7 @@ async fn run_with_watch(flags: Flags, script: String) -> Result<i32, AnyError> {
 async fn run_command(
   flags: Flags,
   run_flags: RunFlags,
-) -> Result<i32, AnyError> {
+) -> Result<i32, AnyError> { 
   // Read script content from stdin
   if run_flags.is_stdin() {
     return run_from_stdin(flags).await;
@@ -809,7 +809,7 @@ async fn run_command(
   // TODO(bartlomieju): actually I think it will also fail if there's an import
   // map specified and bare specifier is used on the command line - this should
   // probably call `ProcState::resolve` instead
-  let ps = ProcState::build(flags).await?;
+  let ps = ProcState::build(flags)?;
   let main_module = if NpmPackageReference::from_str(&run_flags.script).is_ok()
   {
     ModuleSpecifier::parse(&run_flags.script)?
@@ -818,8 +818,11 @@ async fn run_command(
   };
   let permissions =
     Permissions::from_options(&ps.options.permissions_options())?;
+  
+  // let start = std::time::Instant::now();
+
   let mut worker = create_main_worker(
-    &ps,
+    &ps, 
     main_module.clone(),
     permissions,
     vec![],
@@ -827,7 +830,10 @@ async fn run_command(
   )
   .await?;
 
+
   let exit_code = worker.run().await?;
+
+  // println!("{} ms", start.elapsed().as_millis());
   std::mem::forget(worker);
   // Early exit.
   std::process::exit(exit_code);

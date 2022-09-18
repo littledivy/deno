@@ -21,7 +21,7 @@ pub async fn print_docs(
   flags: Flags,
   doc_flags: DocFlags,
 ) -> Result<(), AnyError> {
-  let ps = ProcState::build(flags).await?;
+  let ps = ProcState::build(flags)?;
   let source_file = doc_flags
     .source_file
     .unwrap_or_else(|| "--builtin".to_string());

@@ -603,7 +603,7 @@ pub async fn cover_files(
   flags: Flags,
   coverage_flags: CoverageFlags,
 ) -> Result<(), AnyError> {
-  let ps = ProcState::build(flags).await?;
+  let ps = ProcState::build(flags)?;
 
   let script_coverages =
     collect_coverages(coverage_flags.files, coverage_flags.ignore)?;
