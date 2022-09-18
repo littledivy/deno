@@ -99,12 +99,6 @@ pub fn initialize_context<'s>(
   op_ctxs: &[OpCtx],
   snapshot_loaded: bool,
 ) -> v8::Local<'s, v8::Context> {
-  let scope = &mut v8::EscapableHandleScope::new(scope);
-
-  let context = v8::Context::new(scope);
-  let global = context.global(scope);
-
-  let scope = &mut v8::ContextScope::new(scope, context);
 
   // Snapshot already registered `Deno.core.ops` but
   // extensions may provide ops that aren't part of the snapshot.
@@ -113,13 +107,22 @@ pub fn initialize_context<'s>(
   // a really weird usecase. Remove this once all
   // tsc ops are static at snapshot time.
   if snapshot_loaded {
+    let context = v8::Context::new_from_snapshot(scope);
+    let scope = &mut v8::ContextScope::new(scope, context);
     // Grab the Deno.core.ops object & init it
     let ops_obj = JsRuntime::grab_global::<v8::Object>(scope, "Deno.core.ops")
       .expect("Deno.core.ops to exist");
     initialize_ops(scope, ops_obj, op_ctxs, snapshot_loaded);
+    return context;
 
-    return scope.escape(context);
+    // return scope.escape(context);
   }
+  let scope = &mut v8::EscapableHandleScope::new(scope);
+
+  let context = v8::Context::new(scope);
+  let global = context.global(scope);
+
+  let scope = &mut v8::ContextScope::new(scope, context);
 
   // global.Deno = { core: { } };
   let core_val = JsRuntime::ensure_objs(scope, global, "Deno.core").unwrap();
@@ -140,17 +143,17 @@ fn initialize_ops(
   op_ctxs: &[OpCtx],
   snapshot_loaded: bool,
 ) {
+  let object_template = v8::ObjectTemplate::new(scope);
+  assert!(object_template.set_internal_field_count(
+    (crate::runtime::V8_WRAPPER_OBJECT_INDEX + 1) as usize
+  ));
+
   for ctx in op_ctxs {
     let ctx_ptr = ctx as *const OpCtx as *const c_void;
 
     // If this is a fast op, we don't want it to be in the snapshot.
     // Only initialize once snapshot is loaded.
     if ctx.decl.fast_fn.is_some() && snapshot_loaded {
-      let object_template = v8::ObjectTemplate::new(scope);
-      assert!(object_template.set_internal_field_count(
-        (crate::runtime::V8_WRAPPER_OBJECT_INDEX + 1) as usize
-      ));
-
       let method_obj = object_template.new_instance(scope).unwrap();
       method_obj.set_aligned_pointer_in_internal_field(
         crate::runtime::V8_WRAPPER_OBJECT_INDEX,
@@ -204,7 +207,7 @@ pub fn set_func_raw(
   fast_function: &Option<Box<dyn FastFunction>>,
   snapshot_loaded: bool,
 ) {
-  let key = v8::String::new(scope, name).unwrap();
+  let key = v8::String::new_external_onebyte_static(scope, name.as_bytes()).unwrap();
   let external = v8::External::new(scope, external_data as *mut c_void);
   let builder =
     v8::FunctionTemplate::builder_raw(callback).data(external.into());

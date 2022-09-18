@@ -544,7 +544,7 @@ impl JsRuntime {
       let js_files = m.init_js();
       for (filename, source) in js_files {
         // TODO(@AaronO): use JsRuntime::execute_static() here to move src off heap
-        realm.execute_script(self.v8_isolate(), filename, source)?;
+        realm.execute_script_static(self.v8_isolate(), filename, source)?;
       }
     }
     // Restore extensions
@@ -2115,6 +2115,41 @@ impl JsRealm {
 
     let source = v8::String::new(scope, source_code).unwrap();
     let name = v8::String::new(scope, name).unwrap();
+    let origin = bindings::script_origin(scope, name);
+
+    let tc_scope = &mut v8::TryCatch::new(scope);
+
+    let script = match v8::Script::compile(tc_scope, source, Some(&origin)) {
+      Some(script) => script,
+      None => {
+        let exception = tc_scope.exception().unwrap();
+        return exception_to_err_result(tc_scope, exception, false);
+      }
+    };
+
+    match script.run(tc_scope) {
+      Some(value) => {
+        let value_handle = v8::Global::new(tc_scope, value);
+        Ok(value_handle)
+      }
+      None => {
+        assert!(tc_scope.has_caught());
+        let exception = tc_scope.exception().unwrap();
+        exception_to_err_result(tc_scope, exception, false)
+      }
+    }
+  }
+
+  pub fn execute_script_static(
+    &self,
+    isolate: &mut v8::Isolate,
+    name: &'static str,
+    source_code: &'static str,
+  ) -> Result<v8::Global<v8::Value>, Error> {
+    let scope = &mut self.handle_scope(isolate);
+
+    let source = v8::String::new_external_onebyte_static(scope, source_code.as_bytes()).unwrap();
+    let name = v8::String::new_external_onebyte_static(scope, name.as_bytes()).unwrap();
     let origin = bindings::script_origin(scope, name);
 
     let tc_scope = &mut v8::TryCatch::new(scope);

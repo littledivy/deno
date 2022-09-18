@@ -828,7 +828,9 @@ async fn run_command(
   .await?;
 
   let exit_code = worker.run().await?;
-  Ok(exit_code)
+  std::mem::forget(worker);
+  // Early exit.
+  std::process::exit(exit_code);
 }
 
 async fn task_command(

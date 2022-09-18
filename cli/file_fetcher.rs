@@ -26,7 +26,7 @@ use deno_runtime::deno_fetch::create_http_client;
 use deno_runtime::deno_fetch::reqwest;
 use deno_runtime::deno_tls::rustls;
 use deno_runtime::deno_tls::rustls::RootCertStore;
-use deno_runtime::deno_tls::rustls_native_certs::load_native_certs;
+// use deno_runtime::deno_tls::rustls_native_certs::load_native_certs;
 use deno_runtime::deno_tls::rustls_pemfile;
 use deno_runtime::deno_tls::webpki_roots;
 use deno_runtime::deno_web::BlobStore;
@@ -43,6 +43,8 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::SystemTime;
+use once_cell::sync::OnceCell;
+use std::cell::RefCell;
 
 pub const SUPPORTED_SCHEMES: [&str; 5] =
   ["data", "blob", "file", "http", "https"];
@@ -203,12 +205,12 @@ pub fn get_root_cert_store(
         );
       }
       "system" => {
-        let roots = load_native_certs().expect("could not load platform certs");
-        for root in roots {
-          root_cert_store
-            .add(&rustls::Certificate(root.0))
-            .expect("Failed to add platform cert to root cert store");
-        }
+        // let roots = load_native_certs().expect("could not load platform certs");
+        // for root in roots {
+        //   root_cert_store
+        //     .add(&rustls::Certificate(root.0))
+        //     .expect("Failed to add platform cert to root cert store");
+        // }
       }
       _ => {
         return Err(anyhow!("Unknown certificate store \"{}\" specified (allowed: \"system,mozilla\")", store));
@@ -316,11 +318,18 @@ pub struct FileFetcher {
   cache: FileCache,
   cache_setting: CacheSetting,
   pub http_cache: HttpCache,
-  http_client: reqwest::Client,
+  // HTTP client.
+  http_client: OnceCell<reqwest::Client>,
+  root_cert_store: RefCell<Option<RootCertStore>>,
+  unsafely_ignore_certificate_errors: RefCell<Option<Vec<String>>>,
+
   blob_store: BlobStore,
   download_log_level: log::Level,
   progress_bar: Option<ProgressBar>,
 }
+
+unsafe impl Send for FileFetcher {}
+unsafe impl Sync for FileFetcher {}
 
 impl FileFetcher {
   pub fn new(
@@ -338,14 +347,11 @@ impl FileFetcher {
       cache: Default::default(),
       cache_setting,
       http_cache,
-      http_client: create_http_client(
-        get_user_agent(),
-        root_cert_store,
-        vec![],
-        None,
+      http_client: OnceCell::new(),
+      root_cert_store: RefCell::new(root_cert_store),
+      unsafely_ignore_certificate_errors: RefCell::new(
         unsafely_ignore_certificate_errors,
-        None,
-      )?,
+      ),
       blob_store,
       download_log_level: log::Level::Info,
       progress_bar,
@@ -607,7 +613,22 @@ impl FileFetcher {
     let maybe_auth_token = self.auth_tokens.get(specifier);
     let specifier = specifier.clone();
     let mut permissions = permissions.clone();
-    let client = self.http_client.clone();
+    let client = match self.http_client.get_or_try_init(|| {
+      create_http_client(
+        get_user_agent(),
+        self.root_cert_store.take(),
+        vec![],
+        None,
+        self.unsafely_ignore_certificate_errors.take(),
+        None,
+      )
+    }) {
+      Ok(c) => c.clone(),
+      Err(err) => {
+        return futures::future::err(err).boxed();
+      }
+    };
+
     let file_fetcher = self.clone();
     // A single pass of fetch either yields code or yields a redirect.
     async move {
