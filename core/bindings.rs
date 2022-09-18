@@ -99,6 +99,11 @@ pub fn initialize_context<'s>(
   op_ctxs: &[OpCtx],
   snapshot_loaded: bool,
 ) -> v8::Local<'s, v8::Context> {
+  let scope = &mut v8::EscapableHandleScope::new(scope);
+
+  // If snapshot loaded, this gets the default context.
+  let context = v8::Context::new(scope);
+  let scope = &mut v8::ContextScope::new(scope, context);
 
   // Snapshot already registered `Deno.core.ops` but
   // extensions may provide ops that aren't part of the snapshot.
@@ -107,23 +112,15 @@ pub fn initialize_context<'s>(
   // a really weird usecase. Remove this once all
   // tsc ops are static at snapshot time.
   if snapshot_loaded {
-    let context = v8::Context::new_from_snapshot(scope);
-    let scope = &mut v8::ContextScope::new(scope, context);
     // Grab the Deno.core.ops object & init it
     let ops_obj = JsRuntime::grab_global::<v8::Object>(scope, "Deno.core.ops")
       .expect("Deno.core.ops to exist");
     initialize_ops(scope, ops_obj, op_ctxs, snapshot_loaded);
-    return context;
 
-    // return scope.escape(context);
+    return scope.escape(context);
   }
-  let scope = &mut v8::EscapableHandleScope::new(scope);
 
-  let context = v8::Context::new(scope);
   let global = context.global(scope);
-
-  let scope = &mut v8::ContextScope::new(scope, context);
-
   // global.Deno = { core: { } };
   let core_val = JsRuntime::ensure_objs(scope, global, "Deno.core").unwrap();
 
