@@ -830,7 +830,6 @@ async fn run_command(
   )
   .await?;
 
-
   let exit_code = worker.run().await?;
 
   // println!("{} ms", start.elapsed().as_millis());
