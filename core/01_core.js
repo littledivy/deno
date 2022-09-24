@@ -22,6 +22,7 @@
     MapPrototypeSet,
     PromisePrototypeThen,
     PromisePrototypeFinally,
+    PromiseResolve,
     StringPrototypeSlice,
     ObjectAssign,
     SymbolFor,
@@ -158,6 +159,19 @@
     return res;
   }
 
+  const result = new Uint8Array(1);
+  function callAsync(cb) {
+    const v = cb(result);
+    if (result[0] === 0) {
+      return v;
+    }
+    const promiseId = nextPromiseId++;
+    const p = newPromise(promiseId);
+    cb(promiseId);
+    p[promiseIdSymbol] = promiseId;
+    return p;
+  }
+
   function opAsync(opName, ...args) {
     const promiseId = nextPromiseId++;
     let p = setPromise(promiseId);
@@ -268,6 +282,7 @@
 
   // Extra Deno.core.* exports
   const core = ObjectAssign(globalThis.Deno.core, {
+    callAsync,
     opAsync,
     opSync,
     resources,

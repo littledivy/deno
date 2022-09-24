@@ -32,6 +32,9 @@ pub fn external_references(
     v8::ExternalReference {
       function: empty_fn.map_fn_to(),
     },
+    v8::ExternalReference {
+      function: fast_async_op.map_fn_to(),
+    },
   ];
 
   for ctx in ops {
@@ -117,7 +120,15 @@ pub fn initialize_context<'s>(
     let ops_obj = JsRuntime::grab_global::<v8::Object>(scope, "Deno.core.ops")
       .expect("Deno.core.ops to exist");
     initialize_ops(scope, ops_obj, op_ctxs, snapshot_loaded);
-
+    set_func_raw(
+      scope,
+      ops_obj,
+      "fast_async_op",
+      fast_async_op.map_fn_to(),
+      std::ptr::null_mut(),
+      &Some(Box::new(FastAsyncOp)),
+      snapshot_loaded,
+    );
     return scope.escape(context);
   }
 
@@ -129,7 +140,17 @@ pub fn initialize_context<'s>(
 
   // Bind functions to Deno.core.ops.*
   let ops_obj = JsRuntime::ensure_objs(scope, global, "Deno.core.ops").unwrap();
-
+  if snapshot_loaded {
+  set_func_raw(
+    scope,
+    ops_obj,
+    "fast_async_op",
+    fast_async_op.map_fn_to(),
+    std::ptr::null_mut(),
+    &Some(Box::new(FastAsyncOp)),
+    snapshot_loaded,
+  );
+}
   initialize_ops(scope, ops_obj, op_ctxs, snapshot_loaded);
   scope.escape(context)
 }
@@ -372,6 +393,34 @@ fn empty_fn(
   _rv: v8::ReturnValue,
 ) {
   //Do Nothing
+}
+
+fn fast_async_op(
+  _scope: &mut v8::HandleScope,
+  _args: v8::FunctionCallbackArguments,
+  _: v8::ReturnValue,
+) {
+
+}
+
+fn fast_fast_async_op() {
+
+}
+
+pub struct FastAsyncOp;
+
+impl v8::fast_api::FastFunction for FastAsyncOp {
+  fn function(&self) -> *const ::std::ffi::c_void  {
+    fast_fast_async_op as *const ::std::ffi::c_void
+  }
+  fn args(&self) -> &'static [v8::fast_api::Type] {
+    &[
+      v8::fast_api::Type::TypedArray(v8::fast_api::CType::Uint8),
+    ]
+  }
+  fn return_type(&self) -> v8::fast_api::CType {
+    v8::fast_api::CType::Void
+  }
 }
 
 //It creates a reference to an empty function which can be mantained after the snapshots
