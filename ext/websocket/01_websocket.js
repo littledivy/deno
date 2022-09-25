@@ -61,7 +61,7 @@
         return webidl.converters["ArrayBufferView"](V, opts);
       }
     }
-    return webidl.converters["USVString"](V, opts);
+    return webidl.converters["DOMString"](V, opts);
   };
 
   const CONNECTING = 0;
@@ -288,6 +288,18 @@
         throw new DOMException("readyState not OPEN", "InvalidStateError");
       }
 
+      if (typeof data === "string") {
+        const d = core.byteLength(data);
+        this[_bufferedAmount] += d;
+        PromisePrototypeThen(
+          core.opAsync2(id => ops.op_ws_send_string(id, this[_rid], data)),
+          () => {
+            this[_bufferedAmount] -= d;
+          },
+        );
+        return;
+      }
+
       const sendTypedArray = (ta) => {
         this[_bufferedAmount] += ta.byteLength;
         PromisePrototypeThen(
@@ -310,19 +322,6 @@
         sendTypedArray(data);
       } else if (ObjectPrototypeIsPrototypeOf(ArrayBufferPrototype, data)) {
         sendTypedArray(new DataView(data));
-      } else {
-        const string = String(data);
-        const d = core.encode(string);
-        this[_bufferedAmount] += d.byteLength;
-        PromisePrototypeThen(
-          core.opAsync("op_ws_send", this[_rid], {
-            kind: "text",
-            value: string,
-          }),
-          () => {
-            this[_bufferedAmount] -= d.byteLength;
-          },
-        );
       }
     }
 
@@ -390,10 +389,19 @@
 
     async [_eventLoop]() {
       while (this[_readyState] !== CLOSED) {
-        const { kind, value } = await core.opAsync(
-          "op_ws_next_event",
-          this[_rid],
-        );
+        const value = await core.opAsync2(id => ops.op_ws_next_event_string(id, this[_rid]));
+        this[_serverHandleIdleTimeout]();
+          const event = new MessageEvent("message", {
+            data: value,
+            origin: this[_url],
+        });
+        this.dispatchEvent(event);
+        continue;
+
+        // const { kind, value } = await core.opAsync(
+        //   "op_ws_next_event",
+        //   this[_rid],
+        // );
 
         switch (kind) {
           case "string": {

@@ -158,6 +158,20 @@
     return res;
   }
 
+  function opAsync2(cb) {
+    const promiseId = nextPromiseId++;
+    const promise = setPromise(promiseId);
+    try {
+      cb(promiseId);
+    } catch (err) {
+      // Cleanup the just-created promise
+      getPromise(promiseId);
+      // Rethrow the error
+      throw err;
+    }
+    return promise;
+  }
+
   function opAsync(opName, ...args) {
     const promiseId = nextPromiseId++;
     let p = setPromise(promiseId);
@@ -269,6 +283,7 @@
   // Extra Deno.core.* exports
   const core = ObjectAssign(globalThis.Deno.core, {
     opAsync,
+    opAsync2,
     opSync,
     resources,
     metrics,

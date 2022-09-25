@@ -77,6 +77,7 @@ pub enum WebSocketStreamType {
   Client {
     tx: AsyncRefCell<SplitSink<ClientWsStream, Message>>,
     rx: AsyncRefCell<SplitStream<ClientWsStream>>,
+    fd: std::os::unix::io::RawFd,
   },
   Server {
     tx: AsyncRefCell<SplitSink<ServerWsStream, Message>>,
@@ -317,6 +318,7 @@ where
   });
   let addr = format!("{}:{}", domain, port);
   let tcp_socket = TcpStream::connect(addr).await?;
+  let fd = tcp_socket.as_raw_fd();
 
   let socket: MaybeTlsStream<TcpStream> = match uri.scheme_str() {
     Some("ws") => MaybeTlsStream::Plain(tcp_socket),
@@ -367,6 +369,8 @@ where
     stream: WebSocketStreamType::Client {
       rx: AsyncRefCell::new(ws_rx),
       tx: AsyncRefCell::new(ws_tx),
+
+    fd
     },
     cancel: Default::default(),
   };
@@ -420,6 +424,36 @@ pub async fn op_ws_send(
   Ok(())
 }
 
+#[op]
+pub fn op_ws_send_string(
+  state: Rc<RefCell<OpState>>,
+  rid: ResourceId,
+  value: String,
+) {
+  tokio::task::spawn_local(async move {
+    let resource = state
+    .borrow_mut()
+    .resource_table
+    .get::<WsStreamResource>(rid).unwrap();
+    resource.send(Message::Text(value)).await.unwrap();
+  });
+}
+
+// #[op]
+// pub async fn op_ws_send_string(
+//   state: Rc<RefCell<OpState>>,
+//   rid: ResourceId,
+//   value: String,
+// ) {
+  
+//     let resource = state
+//     .borrow_mut()
+//     .resource_table
+//     .get::<WsStreamResource>(rid).unwrap();
+//     resource.send(Message::Text(value)).await.unwrap();
+  
+// }
+
 #[op(deferred)]
 pub async fn op_ws_close(
   state: Rc<RefCell<OpState>>,
@@ -454,6 +488,55 @@ pub enum NextEventResponse {
   Pong,
   Error(String),
   Closed,
+}
+use std::os::unix::io::FromRawFd;
+use std::os::unix::io::AsRawFd;
+#[op]
+pub fn op_ws_next_event_string_sync(
+  state: &mut OpState,
+  rid: u32, 
+) -> String {
+  let resource = state
+    .resource_table
+    .get::<WsStreamResource>(rid)
+    .unwrap();
+  match &resource.stream {
+    WebSocketStreamType::Client { .. } => {
+      let mut fd = RcRef::map(resource, |r| match &r.stream {
+        WebSocketStreamType::Client { fd, .. } => fd,
+        WebSocketStreamType::Server { .. } => unreachable!(),
+      });
+      let s = unsafe { std::net::TcpStream::from_raw_fd(*fd) };
+      s.set_nonblocking(false).unwrap();
+      let mut s = tokio_tungstenite::tungstenite::protocol::WebSocket::from_raw_socket(s, Role::Client, None);
+      s.write_message(Message::Text("hello".to_string())).unwrap();
+      let r = match s.read_message().unwrap() {
+        Message::Text(s) => s,
+        _ => unreachable!(),
+      };
+      std::mem::forget(s);
+      r
+    }
+    _ => unimplemented!(),
+  }
+}
+
+#[op]
+pub async fn op_ws_next_event_string(
+  state: Rc<RefCell<OpState>>,
+  rid: u32,
+) -> String {
+  let resource = state
+    .borrow_mut()
+    .resource_table
+    .get::<WsStreamResource>(rid).unwrap();
+
+  let cancel = RcRef::map(&resource, |r| &r.cancel);
+  let val = resource.next_message(cancel).await.unwrap();
+  match val {
+    Some(Ok(Message::Text(text))) => text,
+    _ => unreachable!(),
+  }
 }
 
 #[op]
@@ -505,6 +588,9 @@ pub fn init<P: WebSocketPermissions + 'static>(
       op_ws_check_permission_and_cancel_handle::decl::<P>(),
       op_ws_create::decl::<P>(),
       op_ws_send::decl(),
+      op_ws_send_string::decl(),
+      op_ws_next_event_string::decl(),
+      op_ws_next_event_string_sync::decl(),
       op_ws_close::decl(),
       op_ws_next_event::decl(),
     ])
