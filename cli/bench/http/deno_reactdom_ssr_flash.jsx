@@ -1,5 +1,5 @@
 import { renderToReadableStream } from "https://esm.run/react-dom/server";
-import * as React from "https://esm.run/react";
+import * as React from "https://esm.sh/react";
 const { serve } = Deno;
 const addr = Deno.args[0] || "127.0.0.1:4500";
 const [hostname, port] = addr.split(":");
