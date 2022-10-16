@@ -406,6 +406,19 @@ pub enum SendValue {
 }
 
 #[op]
+pub async fn op_ws_send_string(
+  state: Rc<RefCell<OpState>>,
+  rid: ResourceId,
+  value: String,
+) {
+  let resource = state
+    .borrow_mut()
+    .resource_table
+    .get::<WsStreamResource>(rid).unwrap();
+  resource.send(Message::Text(value)).await.unwrap();
+}
+
+#[op]
 pub async fn op_ws_send(
   state: Rc<RefCell<OpState>>,
   rid: ResourceId,
@@ -513,6 +526,7 @@ pub fn init<P: WebSocketPermissions + 'static>(
       op_ws_send::decl(),
       op_ws_close::decl(),
       op_ws_next_event::decl(),
+      op_ws_send_string::decl(),
     ])
     .state(move |state| {
       state.put::<WsUserAgent>(WsUserAgent(user_agent.clone()));

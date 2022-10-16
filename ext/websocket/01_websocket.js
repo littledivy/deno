@@ -290,6 +290,19 @@
         throw new DOMException("readyState not OPEN", "InvalidStateError");
       }
 
+      if (typeof data === "string") {
+        const d = core.byteLength(data);
+        this[_bufferedAmount] += d;
+        PromisePrototypeThen(
+          // core.opAsync2(id => ops.op_ws_send_string(id, this[_rid], data)),
+          core.opAsync("op_ws_send_string", this[_rid], data),
+          () => {
+            this[_bufferedAmount] -= d;
+          },
+        );
+        return;
+      }
+
       const sendTypedArray = (ta) => {
         this[_bufferedAmount] += ta.byteLength;
         PromisePrototypeThen(
