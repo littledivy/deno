@@ -169,12 +169,12 @@
         currentTarget: null,
         eventPhase: Event.NONE,
         target: null,
-        timeStamp: DateNow(),
+        timeStamp: 0, // DateNow(),
       };
-      ReflectDefineProperty(this, "isTrusted", {
-        enumerable: true,
-        get: isTrusted,
-      });
+      // ReflectDefineProperty(this, "isTrusted", {
+      //   enumerable: true,
+      //   get: isTrusted,
+      // });
     }
 
     [SymbolFor("Deno.privateCustomInspect")](inspect) {
@@ -530,9 +530,10 @@
     setDispatched(eventImpl, true);
 
     targetOverride = targetOverride ?? targetImpl;
-    const eventRelatedTarget = hasRelatedTarget(eventImpl)
-      ? eventImpl.relatedTarget
-      : null;
+    const eventRelatedTarget = null;
+      // hasRelatedTarget(eventImpl)
+      //   ? eventImpl.relatedTarget
+      //   : null;
     let relatedTarget = retarget(eventRelatedTarget, targetImpl);
 
     if (targetImpl !== relatedTarget || targetImpl === eventRelatedTarget) {
@@ -1494,5 +1495,6 @@
     setIsTrusted,
     setTarget,
     defineEventHandler,
+    dispatch,
   };
 })(this);

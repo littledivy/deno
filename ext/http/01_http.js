@@ -441,7 +441,7 @@
     setEventTargetData(socket);
     socket[_server] = true;
     response[_ws] = socket;
-    socket[_idleTimeoutDuration] = options.idleTimeout ?? 120;
+    // socket[_idleTimeoutDuration] = options.idleTimeout ?? 120;
     socket[_idleTimeoutTimeout] = null;
 
     return { response, socket };

@@ -10,7 +10,7 @@
   const webidl = window.__bootstrap.webidl;
   const { HTTP_TOKEN_CODE_POINT_RE } = window.__bootstrap.infra;
   const { DOMException } = window.__bootstrap.domException;
-  const { defineEventHandler } = window.__bootstrap.event;
+  const { defineEventHandler, dispatch } = window.__bootstrap.event;
   const { Blob, BlobPrototype } = globalThis.__bootstrap.file;
   const {
     ArrayBufferPrototype,
@@ -82,8 +82,13 @@
   const _idleTimeoutDuration = Symbol("[[idleTimeout]]");
   const _idleTimeoutTimeout = Symbol("[[idleTimeoutTimeout]]");
   const _serverHandleIdleTimeout = Symbol("[[serverHandleIdleTimeout]]");
+  const outEventBuf = new Uint32Array(2);
   class WebSocket extends EventTarget {
     [_rid];
+
+    get rid() {
+      return this[_rid];
+    }
 
     [_readyState] = CONNECTING;
     get readyState() {
@@ -291,52 +296,44 @@
       }
 
       if (typeof data === "string") {
-        const d = core.byteLength(data);
-        this[_bufferedAmount] += d;
-        PromisePrototypeThen(
-          // core.opAsync2(id => ops.op_ws_send_string(id, this[_rid], data)),
-          core.opAsync("op_ws_send_string", this[_rid], data),
-          () => {
-            this[_bufferedAmount] -= d;
-          },
-        );
+        const sent = ops.op_ws_try_send_string(this[_rid], data);
+        if (!sent) {
+          const d = core.byteLength(data);
+          this[_bufferedAmount] += d;
+          PromisePrototypeThen(
+            core.opAsync("op_ws_send_string", this[_rid], data),
+            () => {
+              this[_bufferedAmount] -= d;
+            },
+          );
+        }
         return;
       }
 
       const sendTypedArray = (ta) => {
-        this[_bufferedAmount] += ta.byteLength;
-        PromisePrototypeThen(
-          core.opAsync("op_ws_send", this[_rid], {
-            kind: "binary",
-            value: ta,
-          }),
-          () => {
-            this[_bufferedAmount] -= ta.byteLength;
-          },
-        );
+        const sent = ops.op_ws_try_send_binary(this[_rid], ta);
+        if (!sent) {
+          this[_bufferedAmount] += ta.byteLength;
+          PromisePrototypeThen(
+            core.opAsync("op_ws_send", this[_rid], {
+              kind: "binary",
+              value: ta,
+            }),
+            () => {
+              this[_bufferedAmount] -= ta.byteLength;
+            },
+          );
+        }
       };
 
-      if (ObjectPrototypeIsPrototypeOf(BlobPrototype, data)) {
-        PromisePrototypeThen(
-          data.slice().arrayBuffer(),
-          (ab) => sendTypedArray(new DataView(ab)),
-        );
+      if (ObjectPrototypeIsPrototypeOf(ArrayBufferPrototype, data)) {
+        sendTypedArray(new Uint8Array(data));
       } else if (ArrayBufferIsView(data)) {
         sendTypedArray(data);
-      } else if (ObjectPrototypeIsPrototypeOf(ArrayBufferPrototype, data)) {
-        sendTypedArray(new DataView(data));
-      } else {
-        const string = String(data);
-        const d = core.encode(string);
-        this[_bufferedAmount] += d.byteLength;
+      } else if (ObjectPrototypeIsPrototypeOf(BlobPrototype, data)) {
         PromisePrototypeThen(
-          core.opAsync("op_ws_send", this[_rid], {
-            kind: "text",
-            value: string,
-          }),
-          () => {
-            this[_bufferedAmount] -= d.byteLength;
-          },
+          data.slice().arrayBuffer(),
+          (ab) => sendTypedArray(new Uint8Array(ab)),
         );
       }
     }
@@ -405,13 +402,15 @@
 
     async [_eventLoop]() {
       while (this[_readyState] !== CLOSED) {
-        const { kind, value } = await core.opAsync(
+        const value = await core.opAsync(
           "op_ws_next_event",
           this[_rid],
+          outEventBuf,
         );
-
+        const kind = outEventBuf[0];
         switch (kind) {
-          case "string": {
+          /* string */
+          case 0: {
             this[_serverHandleIdleTimeout]();
             const event = new MessageEvent("message", {
               data: value,
@@ -420,7 +419,8 @@
             this.dispatchEvent(event);
             break;
           }
-          case "binary": {
+          /* binary */
+          case 1: {
             this[_serverHandleIdleTimeout]();
             let data;
 
@@ -434,21 +434,26 @@
               data,
               origin: this[_url],
             });
-            this.dispatchEvent(event);
+            dispatch(this, event);
             break;
           }
-          case "ping": {
+          /* ping */
+          case 3: {
             core.opAsync("op_ws_send", this[_rid], {
               kind: "pong",
             });
             break;
           }
-          case "pong": {
+          /* pong */
+          case 4: {
             this[_serverHandleIdleTimeout]();
             break;
           }
-          case "closed":
-          case "close": {
+          /* closed */
+          case 6:
+          /* close */
+          case 2: {
+            const code = outEventBuf[1];
             const prevState = this[_readyState];
             this[_readyState] = CLOSED;
             clearTimeout(this[_idleTimeoutTimeout]);
@@ -458,8 +463,8 @@
                 await core.opAsync(
                   "op_ws_close",
                   this[_rid],
-                  value.code,
-                  value.reason,
+                  code,
+                  value,
                 );
               } catch {
                 // ignore failures
@@ -468,14 +473,15 @@
 
             const event = new CloseEvent("close", {
               wasClean: true,
-              code: value.code,
-              reason: value.reason,
+              code: code,
+              reason: value,
             });
             this.dispatchEvent(event);
             core.tryClose(this[_rid]);
             break;
           }
-          case "error": {
+          /* error */
+          case 5: {
             this[_readyState] = CLOSED;
 
             const errorEv = new ErrorEvent("error", {
