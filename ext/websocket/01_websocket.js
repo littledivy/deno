@@ -10,7 +10,7 @@
   const webidl = window.__bootstrap.webidl;
   const { HTTP_TOKEN_CODE_POINT_RE } = window.__bootstrap.infra;
   const { DOMException } = window.__bootstrap.domException;
-  const { defineEventHandler } = window.__bootstrap.event;
+  const { defineEventHandler, dispatch } = window.__bootstrap.event;
   const { Blob, BlobPrototype } = globalThis.__bootstrap.file;
   const {
     ArrayBufferPrototype,
@@ -62,7 +62,7 @@
         return webidl.converters["ArrayBufferView"](V, opts);
       }
     }
-    return webidl.converters["USVString"](V, opts);
+    return webidl.converters["DOMString"](V, opts);
   };
 
   const CONNECTING = 0;
@@ -447,7 +447,7 @@
               data,
               origin: this[_url],
             });
-            this.dispatchEvent(event);
+            dispatch(this, event);
             break;
           }
           /* ping */

@@ -159,22 +159,27 @@
         prefix: "Failed to construct 'Event'",
         context: "Argument 1",
       });
-      const eventInit = eventInitConverter(eventInitDict, {
-        prefix: "Failed to construct 'Event'",
-        context: "Argument 2",
-      });
+      // const eventInit = eventInitConverter(eventInitDict, {
+      //   prefix: "Failed to construct 'Event'",
+      //   context: "Argument 2",
+      // });
       this[_attributes] = {
         type,
-        ...eventInit,
+        // ...eventInitDict,
+        data: eventInitDict.data,
         currentTarget: null,
         eventPhase: Event.NONE,
         target: null,
         timeStamp: DateNow(),
       };
-      ReflectDefineProperty(this, "isTrusted", {
-        enumerable: true,
-        get: isTrusted,
-      });
+      // ReflectDefineProperty(this, "isTrusted", {
+      //   enumerable: true,
+      //   get: isTrusted,
+      // });
+    }
+
+    get isTrusted() {
+      return this[_isTrusted];
     }
 
     [SymbolFor("Deno.privateCustomInspect")](inspect) {
@@ -530,10 +535,11 @@
     setDispatched(eventImpl, true);
 
     targetOverride = targetOverride ?? targetImpl;
-    const eventRelatedTarget = hasRelatedTarget(eventImpl)
-      ? eventImpl.relatedTarget
-      : null;
-    let relatedTarget = retarget(eventRelatedTarget, targetImpl);
+    const eventRelatedTarget = null; 
+    // hasRelatedTarget(eventImpl)
+    //   ? eventImpl.relatedTarget
+    //   : null;
+    let relatedTarget = eventRelatedTarget//; retarget(eventRelatedTarget, targetImpl);
 
     if (targetImpl !== relatedTarget || targetImpl === eventRelatedTarget) {
       const touchTargets = [];
@@ -1494,5 +1500,6 @@
     setIsTrusted,
     setTarget,
     defineEventHandler,
+    dispatch,
   };
 })(this);

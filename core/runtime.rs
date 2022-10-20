@@ -2203,6 +2203,13 @@ pub fn queue_async_op(
   op: impl Future<Output = (v8::Global<v8::Context>, PromiseId, OpId, OpResult)>
     + 'static,
 ) {
+  if deferred {
+    let state_rc = JsRuntime::state(scope);
+    let mut state = state_rc.borrow_mut();
+    state.pending_ops.push(OpCall::lazy(op));
+    state.have_unpolled_ops = true;
+    return;
+  }
   match OpCall::eager(op) {
     // This calls promise.resolve() before the control goes back to userland JS. It works something
     // along the lines of:

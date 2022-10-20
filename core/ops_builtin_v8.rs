@@ -196,8 +196,8 @@ fn op_queue_microtask(
   scope: &mut v8::HandleScope,
   cb: serde_v8::Value,
 ) -> Result<(), Error> {
-  let cb = to_v8_fn(scope, cb)?;
-  let cb = v8::Local::new(scope, cb);
+  let cb = v8::Local::<v8::Function>::try_from(cb.v8_value)
+    .map_err(|err| type_error(err.to_string()))?;
   scope.enqueue_microtask(cb);
   Ok(())
 }
