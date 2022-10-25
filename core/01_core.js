@@ -108,12 +108,11 @@
     return promiseRing[idx] != NO_PROMISE;
   }
 
+  const promiseIdI32 = new Int32Array(4096);
   function opresolve() {
-    for (let i = 0; i < arguments.length; i += 2) {
-      const promiseId = arguments[i];
-      const res = arguments[i + 1];
-      const promise = getPromise(promiseId);
-      promise.resolve(res);
+    for (let i = 0; i < arguments.length; i += 1) {
+      const p = getPromise(promiseIdI32[i]);
+      p.resolve(arguments[i]);
     }
   }
 
@@ -309,6 +308,7 @@
     registerErrorClass,
     buildCustomError,
     opresolve,
+    promiseIdI32,
     BadResource,
     BadResourcePrototype,
     Interrupted,
