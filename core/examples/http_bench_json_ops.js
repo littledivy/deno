@@ -21,11 +21,15 @@ function accept(serverRid) {
   return Deno.core.ops.op_accept(serverRid);
 }
 
+const { ops } = Deno.core;
+
 async function serve(rid) {
   try {
     while (true) {
       await Deno.core.read(rid, requestBuf);
-      await Deno.core.writeAll(rid, responseBuf);
+      if (ops.op_try_write(rid, responseBuf) == 0) {
+        await Deno.core.writeAll(rid, responseBuf);
+      }
     }
   } catch (e) {
     if (

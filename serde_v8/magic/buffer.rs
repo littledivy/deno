@@ -17,6 +17,7 @@ pub enum ZeroCopyBuf {
   // Variant of the ZeroCopyBuf than is never exposed to the JS.
   // Generally used to pass Vec<u8> backed buffers to resource methods.
   Temp(Vec<u8>),
+  TempSlice(*mut u8, usize),
 }
 
 impl_magic!(ZeroCopyBuf);
@@ -30,6 +31,10 @@ impl Debug for ZeroCopyBuf {
 impl ZeroCopyBuf {
   pub fn empty() -> Self {
     ZeroCopyBuf::ToV8(Some(vec![0_u8; 0].into_boxed_slice()))
+  }
+
+  pub fn from_mut_slice(slice: &mut [u8]) -> Self {
+    ZeroCopyBuf::TempSlice(slice.as_mut_ptr(), slice.len())
   }
 
   pub fn new_temp(vec: Vec<u8>) -> Self {
@@ -50,6 +55,7 @@ impl Clone for ZeroCopyBuf {
     match self {
       Self::FromV8(zbuf) => Self::FromV8(zbuf.clone()),
       Self::Temp(vec) => Self::Temp(vec.clone()),
+      Self::TempSlice(ptr, len) => Self::TempSlice(*ptr, *len),
       Self::ToV8(_) => panic!("Don't Clone a ZeroCopyBuf sent to v8"),
     }
   }
@@ -73,6 +79,9 @@ impl Deref for ZeroCopyBuf {
     match self {
       Self::FromV8(buf) => buf,
       Self::Temp(vec) => vec,
+      Self::TempSlice(ptr, len) => unsafe {
+        std::slice::from_raw_parts(*ptr, *len)
+      },
       Self::ToV8(_) => panic!("Don't Deref a ZeroCopyBuf sent to v8"),
     }
   }
@@ -83,6 +92,9 @@ impl DerefMut for ZeroCopyBuf {
     match self {
       Self::FromV8(buf) => &mut *buf,
       Self::Temp(vec) => &mut *vec,
+      Self::TempSlice(ptr, len) => unsafe {
+        std::slice::from_raw_parts_mut(*ptr, *len)
+      },
       Self::ToV8(_) => panic!("Don't Deref a ZeroCopyBuf sent to v8"),
     }
   }
@@ -110,7 +122,7 @@ impl ToV8 for ZeroCopyBuf {
         let value: &[u8] = buf;
         value.into()
       }
-      Self::Temp(_) => unreachable!(),
+      Self::TempSlice(..) | Self::Temp(_) => unreachable!(),
       Self::ToV8(ref mut x) => x.take().expect("ZeroCopyBuf was empty"),
     };
 
@@ -148,6 +160,7 @@ impl From<ZeroCopyBuf> for bytes::Bytes {
   fn from(zbuf: ZeroCopyBuf) -> bytes::Bytes {
     match zbuf {
       ZeroCopyBuf::FromV8(v) => v.into(),
+      ZeroCopyBuf::TempSlice(..) => unreachable!(),
       ZeroCopyBuf::ToV8(mut v) => {
         v.take().expect("ZeroCopyBuf was empty").into()
       }

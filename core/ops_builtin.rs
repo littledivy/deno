@@ -39,6 +39,7 @@ pub(crate) fn init_builtins() -> Extension {
       op_read_all::decl(),
       op_write::decl(),
       op_write_all::decl(),
+      op_try_write::decl(),
       op_shutdown::decl(),
       op_metrics::decl(),
       op_format_file_name::decl(),
@@ -252,6 +253,32 @@ async fn op_write(
   let view = BufView::from(buf);
   let resp = resource.write(view).await?;
   Ok(resp.nwritten() as u32)
+}
+
+#[op(fast)]
+fn op_try_write(
+  state: &mut OpState,
+  rid: u32,
+  buf: &mut [u8],
+) -> Result<u32, Error> {
+  use futures::FutureExt;
+
+  let resource = state.resource_table.get_any(rid)?;
+  let view = BufView::from(ZeroCopyBuf::from_mut_slice(buf));
+
+  let waker = futures::task::noop_waker();
+  let mut cx = futures::task::Context::from_waker(&waker);
+  let mut fut = resource.write(view);
+
+  use std::task::Poll;
+  match fut
+    .poll_unpin(&mut cx)
+    .map(|r| r.map(|r| r.nwritten() as u32))
+  {
+    Poll::Ready(Ok(n)) => Ok(n),
+    Poll::Ready(Err(e)) => Err(e),
+    Poll::Pending => Ok(0),
+  }
 }
 
 #[op]
