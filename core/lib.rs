@@ -19,6 +19,7 @@ mod ops_metrics;
 mod resources;
 mod runtime;
 mod source_map;
+mod futures_list;
 
 // Re-exports
 pub use anyhow;

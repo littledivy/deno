@@ -13,6 +13,7 @@ use crate::modules::ModuleId;
 use crate::modules::ModuleLoadId;
 use crate::modules::ModuleLoader;
 use crate::modules::ModuleMap;
+use crate::futures_list::FuturesList;
 use crate::modules::NoopModuleLoader;
 use crate::op_void_async;
 use crate::op_void_sync;
@@ -166,7 +167,7 @@ pub struct JsRuntimeState {
   dyn_module_evaluate_idle_counter: u32,
   pub(crate) source_map_getter: Option<Box<dyn SourceMapGetter>>,
   pub(crate) source_map_cache: SourceMapCache,
-  pub(crate) pending_ops: FuturesUnordered<PendingOpFuture>,
+  pub(crate) pending_ops: FuturesList<PendingOpFuture>,
   pub(crate) unrefed_ops: HashSet<i32>,
   pub(crate) have_unpolled_ops: bool,
   pub(crate) op_state: Rc<RefCell<OpState>>,
@@ -372,7 +373,7 @@ impl JsRuntime {
       js_wasm_streaming_cb: None,
       source_map_getter: options.source_map_getter,
       source_map_cache: Default::default(),
-      pending_ops: FuturesUnordered::new(),
+      pending_ops: FuturesList::new(),
       unrefed_ops: HashSet::new(),
       shared_array_buffer_store: options.shared_array_buffer_store,
       compiled_wasm_module_store: options.compiled_wasm_module_store,
@@ -2021,7 +2022,7 @@ impl JsRuntime {
     // This batch is received in JS via the special `arguments` variable
     // and then each tuple is used to resolve or reject promises
     let mut args: Vec<v8::Local<v8::Value>> = vec![];
-
+    
     // Now handle actual ops.
     {
       let mut state = self.state.borrow_mut();

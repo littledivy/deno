@@ -155,7 +155,7 @@ dependencies = [
  "futures-core",
  "memchr",
  "pin-project-lite",
- "tokio",
+ "tokio 1.21.1",
 ]
 
 [[package]]
@@ -840,7 +840,7 @@ dependencies = [
  "test_util",
  "text-size",
  "text_lines",
- "tokio",
+ "tokio 1.21.1",
  "tokio-util",
  "tower-lsp",
  "trust-dns-client",
@@ -893,7 +893,7 @@ dependencies = [
  "bencher",
  "deno_core",
  "once_cell",
- "tokio",
+ "tokio 1.21.1",
 ]
 
 [[package]]
@@ -902,7 +902,7 @@ version = "0.68.0"
 dependencies = [
  "async-trait",
  "deno_core",
- "tokio",
+ "tokio 1.21.1",
  "uuid",
 ]
 
@@ -915,7 +915,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "sha2",
- "tokio",
+ "tokio 1.21.1",
 ]
 
 [[package]]
@@ -944,7 +944,7 @@ dependencies = [
  "serde_json",
  "serde_v8",
  "sourcemap",
- "tokio",
+ "tokio 1.21.2",
  "url",
  "v8",
 ]
@@ -978,7 +978,7 @@ dependencies = [
  "sha-1 0.10.0",
  "sha2",
  "spki",
- "tokio",
+ "tokio 1.21.1",
  "uuid",
  "x25519-dalek",
 ]
@@ -1027,7 +1027,7 @@ dependencies = [
  "http",
  "reqwest",
  "serde",
- "tokio",
+ "tokio 1.21.1",
  "tokio-stream",
  "tokio-util",
 ]
@@ -1041,7 +1041,7 @@ dependencies = [
  "dynasmrt",
  "libffi",
  "serde",
- "tokio",
+ "tokio 1.21.1",
  "winapi 0.3.9",
 ]
 
@@ -1061,7 +1061,7 @@ dependencies = [
  "rustls-pemfile",
  "serde",
  "socket2",
- "tokio",
+ "tokio 1.21.1",
 ]
 
 [[package]]
@@ -1106,7 +1106,7 @@ dependencies = [
  "phf",
  "ring",
  "serde",
- "tokio",
+ "tokio 1.21.1",
  "tokio-util",
 ]
 
@@ -1144,7 +1144,7 @@ dependencies = [
  "log",
  "serde",
  "socket2",
- "tokio",
+ "tokio 1.21.1",
  "trust-dns-proto",
  "trust-dns-resolver",
 ]
@@ -1219,7 +1219,7 @@ dependencies = [
  "sys-info",
  "termcolor",
  "test_util",
- "tokio",
+ "tokio 1.21.1",
  "uuid",
  "winapi 0.3.9",
  "winres",
@@ -1236,7 +1236,7 @@ dependencies = [
  "monch",
  "os_pipe",
  "path-dedot",
- "tokio",
+ "tokio 1.21.1",
  "tokio-util",
 ]
 
@@ -1279,7 +1279,7 @@ dependencies = [
  "encoding_rs",
  "flate2",
  "serde",
- "tokio",
+ "tokio 1.21.1",
  "uuid",
 ]
 
@@ -1289,7 +1289,7 @@ version = "0.75.0"
 dependencies = [
  "deno_core",
  "serde",
- "tokio",
+ "tokio 1.21.1",
  "wgpu-core",
  "wgpu-types",
 ]
@@ -1310,7 +1310,7 @@ dependencies = [
  "http",
  "hyper",
  "serde",
- "tokio",
+ "tokio 1.21.1",
  "tokio-rustls",
  "tokio-tungstenite",
 ]
@@ -1674,7 +1674,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror",
- "tokio",
+ "tokio 1.21.1",
  "url",
 ]
 
@@ -2102,7 +2102,7 @@ dependencies = [
  "http",
  "indexmap",
  "slab",
- "tokio",
+ "tokio 1.21.1",
  "tokio-util",
  "tracing",
 ]
@@ -2233,7 +2233,7 @@ dependencies = [
  "itoa",
  "pin-project-lite",
  "socket2",
- "tokio",
+ "tokio 1.21.1",
  "tower-service",
  "tracing",
  "want",
@@ -2248,7 +2248,7 @@ dependencies = [
  "http",
  "hyper",
  "rustls",
- "tokio",
+ "tokio 1.21.1",
  "tokio-rustls",
 ]
 
@@ -3584,7 +3584,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_urlencoded",
- "tokio",
+ "tokio 1.21.1",
  "tokio-rustls",
  "tokio-socks",
  "tokio-util",
@@ -4753,7 +4753,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tar",
- "tokio",
+ "tokio 1.21.1",
  "tokio-rustls",
  "tokio-tungstenite",
  "url",
@@ -4843,8 +4843,36 @@ dependencies = [
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",
- "tokio-macros",
+ "tokio-macros 1.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "winapi 0.3.9",
+]
+
+[[package]]
+name = "tokio"
+version = "1.21.2"
+dependencies = [
+ "autocfg",
+ "bytes",
+ "futures",
+ "libc",
+ "memchr",
+ "mio",
+ "num_cpus",
+ "parking_lot 0.12.1",
+ "pin-project-lite",
+ "signal-hook-registry",
+ "socket2",
+ "tokio-macros 1.8.0",
+ "winapi 0.3.9",
+]
+
+[[package]]
+name = "tokio-macros"
+version = "1.8.0"
+dependencies = [
+ "proc-macro2 1.0.43",
+ "quote 1.0.21",
+ "syn 1.0.99",
 ]
 
 [[package]]
@@ -4865,7 +4893,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c43ee83903113e03984cb9e5cebe6c04a5116269e900e3ddba8f068a62adda59"
 dependencies = [
  "rustls",
- "tokio",
+ "tokio 1.21.1",
  "webpki",
 ]
 
@@ -4878,7 +4906,7 @@ dependencies = [
  "either",
  "futures-util",
  "thiserror",
- "tokio",
+ "tokio 1.21.1",
 ]
 
 [[package]]
@@ -4889,7 +4917,7 @@ checksum = "df54d54117d6fdc4e4fea40fe1e4e566b3505700e148a6827e59b34b0d2600d9"
 dependencies = [
  "futures-core",
  "pin-project-lite",
- "tokio",
+ "tokio 1.21.1",
 ]
 
 [[package]]
@@ -4901,7 +4929,7 @@ dependencies = [
  "futures-util",
  "log",
  "rustls",
- "tokio",
+ "tokio 1.21.1",
  "tokio-rustls",
  "tungstenite",
  "webpki",
@@ -4918,7 +4946,7 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "pin-project-lite",
- "tokio",
+ "tokio 1.21.1",
  "tracing",
 ]
 
@@ -4968,7 +4996,7 @@ dependencies = [
  "memchr",
  "serde",
  "serde_json",
- "tokio",
+ "tokio 1.21.1",
  "tokio-util",
  "tower",
  "tower-lsp-macros",
@@ -5048,7 +5076,7 @@ dependencies = [
  "rand",
  "thiserror",
  "time",
- "tokio",
+ "tokio 1.21.1",
  "tracing",
  "trust-dns-proto",
 ]
@@ -5074,7 +5102,7 @@ dependencies = [
  "smallvec",
  "thiserror",
  "tinyvec",
- "tokio",
+ "tokio 1.21.1",
  "tracing",
  "url",
 ]
@@ -5095,7 +5123,7 @@ dependencies = [
  "serde",
  "smallvec",
  "thiserror",
- "tokio",
+ "tokio 1.21.1",
  "tracing",
  "trust-dns-proto",
 ]
@@ -5115,7 +5143,7 @@ dependencies = [
  "serde",
  "thiserror",
  "time",
- "tokio",
+ "tokio 1.21.1",
  "toml",
  "tracing",
  "trust-dns-client",

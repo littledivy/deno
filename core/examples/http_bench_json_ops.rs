@@ -75,22 +75,17 @@ impl TryFrom<std::net::TcpListener> for TcpListener {
 struct TcpStream {
   rd: AsyncRefCell<tokio::net::tcp::OwnedReadHalf>,
   wr: AsyncRefCell<tokio::net::tcp::OwnedWriteHalf>,
-  // When a `TcpStream` resource is closed, all pending 'read' ops are
-  // canceled, while 'write' ops are allowed to complete. Therefore only
-  // 'read' futures are attached to this cancel handle.
-  cancel: CancelHandle,
 }
 
 impl TcpStream {
   async fn read(self: Rc<Self>, data: &mut [u8]) -> Result<usize, Error> {
-    let mut rd = RcRef::map(&self, |r| &r.rd).borrow_mut().await;
-    let cancel = RcRef::map(self, |r| &r.cancel);
-    let nread = rd.read(data).try_or_cancel(cancel).await?;
+    let mut rd = RcRef::map(&self, |r| &r.rd).try_borrow_mut().unwrap();
+    let nread = rd.read(data).await?;
     Ok(nread)
   }
 
   async fn write(self: Rc<Self>, data: &[u8]) -> Result<usize, Error> {
-    let mut wr = RcRef::map(self, |r| &r.wr).borrow_mut().await;
+    let mut wr = RcRef::map(self, |r| &r.wr).try_borrow_mut().unwrap();
     let nwritten = wr.write(data).await?;
     Ok(nwritten)
   }
@@ -101,7 +96,7 @@ impl Resource for TcpStream {
   deno_core::impl_writable!();
 
   fn close(self: Rc<Self>) {
-    self.cancel.cancel()
+    
   }
 }
 
@@ -111,7 +106,6 @@ impl From<tokio::net::TcpStream> for TcpStream {
     Self {
       rd: rd.into(),
       wr: wr.into(),
-      cancel: Default::default(),
     }
   }
 }
@@ -165,7 +159,7 @@ fn main() {
 
   let mut js_runtime = create_js_runtime();
   let runtime = tokio::runtime::Builder::new_current_thread()
-    .enable_all()
+    .enable_io()
     .build()
     .unwrap();
 

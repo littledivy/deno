@@ -43,4 +43,6 @@ path = "examples/http_bench_json_ops.rs"
 # These dependencies are only used for the 'http_bench_*_ops' examples.
 [dev-dependencies]
 deno_ast = { version = "0.20.0", features = ["transpiling"] }
-tokio = { version = "1.21", features = ["full"] }
+# tokio = { version = "1.21", features = ["full"] }
+# tokio = { git = "https://github.com/tokio-rs/tokio", features = ["full"] }
+tokio = { path = "../../tokio/tokio", features = ["full"] }
