@@ -1062,10 +1062,10 @@ impl JsRuntime {
       //
       loop {
         let poll_imports = self.prepare_dyn_imports(cx)?;
-        assert!(poll_imports.is_ready());
+        debug_assert!(poll_imports.is_ready());
 
         let poll_imports = self.poll_dyn_imports(cx)?;
-        assert!(poll_imports.is_ready());
+        debug_assert!(poll_imports.is_ready());
 
         if !self.evaluate_dyn_imports() {
           break;
@@ -1077,7 +1077,7 @@ impl JsRuntime {
 
     // Event loop middlewares
     let mut maybe_scheduling = false;
-    {
+    if !self.event_loop_middlewares.is_empty() {
       let op_state = self.state.borrow().op_state.clone();
       for f in &self.event_loop_middlewares {
         if f(op_state.clone(), cx) {
@@ -1179,7 +1179,8 @@ Pending dynamic modules:\n".to_string();
         .pending_dyn_mod_evaluate
         .is_empty(),
       has_pending_module_evaluation: state.pending_mod_evaluate.is_some(),
-      has_pending_background_tasks: isolate.has_pending_background_tasks(),
+      // has_pending_background_tasks: isolate.has_pending_background_tasks(),
+      has_pending_background_tasks: false,
       has_tick_scheduled: state.has_tick_scheduled,
     }
   }
