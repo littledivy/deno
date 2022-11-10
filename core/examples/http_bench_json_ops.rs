@@ -1,13 +1,9 @@
 // Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
 use deno_core::anyhow::Error;
 use deno_core::op;
-use deno_core::AsyncRefCell;
 use deno_core::AsyncResult;
-use deno_core::CancelHandle;
-use deno_core::CancelTryFuture;
 use deno_core::JsRuntime;
 use deno_core::OpState;
-use deno_core::RcRef;
 use deno_core::Resource;
 use deno_core::ResourceId;
 use std::cell::RefCell;
@@ -43,21 +39,17 @@ impl log::Log for Logger {
 // reference to the listener.
 struct TcpListener {
   inner: tokio::net::TcpListener,
-  cancel: CancelHandle,
 }
 
 impl TcpListener {
   async fn accept(self: Rc<Self>) -> Result<TcpStream, std::io::Error> {
-    let cancel = RcRef::map(&self, |r| &r.cancel);
-    let stream = self.inner.accept().try_or_cancel(cancel).await?.0.into();
+    let stream = self.inner.accept().await?.0.into();
     Ok(stream)
   }
 }
 
 impl Resource for TcpListener {
-  fn close(self: Rc<Self>) {
-    self.cancel.cancel();
-  }
+  fn close(self: Rc<Self>) {}
 }
 
 impl TryFrom<std::net::TcpListener> for TcpListener {
@@ -67,31 +59,31 @@ impl TryFrom<std::net::TcpListener> for TcpListener {
   ) -> Result<Self, Self::Error> {
     tokio::net::TcpListener::try_from(std_listener).map(|tokio_listener| Self {
       inner: tokio_listener,
-      cancel: Default::default(),
     })
   }
 }
 
 struct TcpStream {
-  rd: AsyncRefCell<tokio::net::tcp::OwnedReadHalf>,
-  wr: AsyncRefCell<tokio::net::tcp::OwnedWriteHalf>,
-  // When a `TcpStream` resource is closed, all pending 'read' ops are
-  // canceled, while 'write' ops are allowed to complete. Therefore only
-  // 'read' futures are attached to this cancel handle.
-  cancel: CancelHandle,
+  rd: RefCell<tokio::net::tcp::OwnedReadHalf>,
+  wr: RefCell<tokio::net::tcp::OwnedWriteHalf>,
 }
 
 impl TcpStream {
-  async fn read(self: Rc<Self>, data: &mut [u8]) -> Result<usize, Error> {
-    let mut rd = RcRef::map(&self, |r| &r.rd).borrow_mut().await;
-    let cancel = RcRef::map(self, |r| &r.cancel);
-    let nread = rd.read(data).try_or_cancel(cancel).await?;
+  async fn read(self: Rc<Self>, data: &mut [u8]) -> Result<usize, Error> {      
+    let mut rd = self.rd.borrow_mut();
+    let nread = rd.read(data).await?;
     Ok(nread)
   }
 
   async fn write(self: Rc<Self>, data: &[u8]) -> Result<usize, Error> {
-    let mut wr = RcRef::map(self, |r| &r.wr).borrow_mut().await;
+    let mut wr = self.wr.borrow_mut();
     let nwritten = wr.write(data).await?;
+    Ok(nwritten)
+  }
+
+  fn try_write(self: Rc<Self>, data: &[u8]) -> Result<usize, Error> {
+    let wr = self.wr.borrow();
+    let nwritten = wr.try_write(data)?;
     Ok(nwritten)
   }
 }
@@ -100,9 +92,7 @@ impl Resource for TcpStream {
   deno_core::impl_readable_byob!();
   deno_core::impl_writable!();
 
-  fn close(self: Rc<Self>) {
-    self.cancel.cancel()
-  }
+  fn close(self: Rc<Self>) {}
 }
 
 impl From<tokio::net::TcpStream> for TcpStream {
@@ -111,14 +101,17 @@ impl From<tokio::net::TcpStream> for TcpStream {
     Self {
       rd: rd.into(),
       wr: wr.into(),
-      cancel: Default::default(),
     }
   }
 }
 
 fn create_js_runtime() -> JsRuntime {
   let ext = deno_core::Extension::builder()
-    .ops(vec![op_listen::decl(), op_accept::decl()])
+    .ops(vec![
+      op_listen::decl(),
+      op_accept::decl(),
+      op_try_write::decl(),
+    ])
     .build();
 
   JsRuntime::new(deno_core::RuntimeOptions {
@@ -151,6 +144,16 @@ async fn op_accept(
   Ok(rid)
 }
 
+#[op(fast)]
+fn op_try_write(
+  state: &mut OpState,
+  rid: u32,
+  value: &[u8],
+) -> Result<bool, Error> {
+  let stream = state.resource_table.get::<TcpStream>(rid)?;
+  Ok(stream.try_write(value).is_ok())
+}
+
 fn main() {
   log::set_logger(&Logger).unwrap();
   log::set_max_level(
@@ -165,9 +168,10 @@ fn main() {
 
   let mut js_runtime = create_js_runtime();
   let runtime = tokio::runtime::Builder::new_current_thread()
-    .enable_all()
+    .enable_io()
     .build()
     .unwrap();
+  let taskset = tokio::task::LocalSet::new();
 
   let future = async move {
     js_runtime
@@ -176,7 +180,20 @@ fn main() {
         include_str!("http_bench_json_ops.js"),
       )
       .unwrap();
-    js_runtime.run_event_loop(false).await
+    tokio::task::spawn_local(
+      async move { js_runtime.run_event_loop(false).await },
+    )
+    .await
   };
-  runtime.block_on(future).unwrap();
+  let _ = taskset.block_on(&runtime, future).unwrap();
+  // let future = async move {
+  //   js_runtime
+  //     .execute_script(
+  //       "http_bench_json_ops.js",
+  //       include_str!("http_bench_json_ops.js"),
+  //     )
+  //     .unwrap();
+  //   js_runtime.run_event_loop(false).await
+  // };
+  // runtime.block_on(future).unwrap();
 }

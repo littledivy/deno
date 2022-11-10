@@ -32,6 +32,7 @@ use futures::future::FutureExt;
 use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt;
 use futures::task::AtomicWaker;
+use smallvec::SmallVec;
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -927,13 +928,13 @@ impl JsRuntime {
 
   fn pump_v8_message_loop(&mut self) -> Result<(), Error> {
     let scope = &mut self.handle_scope();
-    while v8::Platform::pump_message_loop(
-      &v8::V8::get_current_platform(),
-      scope,
-      false, // don't block if there are no tasks
-    ) {
-      // do nothing
-    }
+    // while v8::Platform::pump_message_loop(
+    //   &v8::V8::get_current_platform(),
+    //   scope,
+    //   false, // don't block if there are no tasks
+    // ) {
+    //   // do nothing
+    // }
 
     let tc_scope = &mut v8::TryCatch::new(scope);
     tc_scope.perform_microtask_checkpoint();
@@ -1972,11 +1973,13 @@ impl JsRuntime {
   // Send finished responses to JS
   fn resolve_async_ops(&mut self, cx: &mut Context) -> Result<(), Error> {
     let isolate = self.v8_isolate.as_mut().unwrap();
-
-    let js_recv_cb_handle = self.state.borrow().js_recv_cb.clone().unwrap();
-    let global_realm = self.state.borrow().global_realm.clone().unwrap();
-    let scope = &mut global_realm.handle_scope(isolate);
-
+    let scope = &mut {
+      let state = self.state.borrow();
+      v8::HandleScope::with_context(
+        unsafe { &mut *(isolate as *mut _) },
+        &state.global_realm.as_ref().unwrap().0,
+      )
+    };
     // We return async responses to JS in unbounded batches (may change),
     // each batch is a flat vector of tuples:
     // `[promise_id1, op_result1, promise_id2, op_result2, ...]`
@@ -1984,7 +1987,7 @@ impl JsRuntime {
     // which contains a value OR an error, encoded as a tuple.
     // This batch is received in JS via the special `arguments` variable
     // and then each tuple is used to resolve or reject promises
-    let mut args: Vec<v8::Local<v8::Value>> = vec![];
+    let mut args: SmallVec<[v8::Local<v8::Value>; 16]> = SmallVec::new();
 
     // Now handle actual ops.
     {
@@ -2010,15 +2013,17 @@ impl JsRuntime {
       return Ok(());
     }
 
-    let tc_scope = &mut v8::TryCatch::new(scope);
-    let js_recv_cb = js_recv_cb_handle.open(tc_scope);
-    let this = v8::undefined(tc_scope).into();
-    js_recv_cb.call(tc_scope, this, args.as_slice());
+    let js_recv_cb_handle = self.state.borrow().js_recv_cb.clone().unwrap();
+    // let tc_scope = &mut v8::TryCatch::new(scope);
+    let js_recv_cb = js_recv_cb_handle.open(scope);
+    let this = v8::undefined(isolate).into();
+    js_recv_cb.call(scope, this, args.as_slice());
 
-    match tc_scope.exception() {
-      None => Ok(()),
-      Some(exception) => exception_to_err_result(tc_scope, exception, false),
-    }
+    // match tc_scope.exception() {
+    //   None => Ok(()),
+    //   Some(exception) => exception_to_err_result(tc_scope, exception, false),
+    // }
+    Ok(())
   }
 
   fn drain_macrotasks(&mut self) -> Result<(), Error> {
@@ -2222,7 +2227,12 @@ pub fn queue_async_op(
     // atleast 1 Rc is held by the JsRuntime.
     None => unreachable!(),
   };
-
+  if deferred {
+    let mut state = runtime_state.borrow_mut();
+    state.pending_ops.push(OpCall::lazy(op));
+    state.have_unpolled_ops = true;
+    return;
+  }
   match OpCall::eager(op) {
     // This calls promise.resolve() before the control goes back to userland JS. It works something
     // along the lines of:

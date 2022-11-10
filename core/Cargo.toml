@@ -35,12 +35,16 @@ serde_v8 = { version = "0.69.0", path = "../serde_v8" }
 sourcemap = "6.1"
 url = { version = "2.3.1", features = ["serde", "expose_internals"] }
 v8 = { version = "0.54.0", default-features = false }
+smallvec = { version = "1.8", features = ["union"] }
 
 [[example]]
 name = "http_bench_json_ops"
 path = "examples/http_bench_json_ops.rs"
 
+
 # These dependencies are only used for the 'http_bench_*_ops' examples.
 [dev-dependencies]
 deno_ast = { version = "0.20.0", features = ["transpiling"] }
-tokio = { version = "1.21", features = ["full"] }
+# tokio = { version = "1.21", features = ["full"] }
+tokio = { path = "../../tokio/tokio", features = ["full"] }
+
