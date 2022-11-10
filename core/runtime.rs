@@ -1030,7 +1030,7 @@ impl JsRuntime {
     {
       let state = self.state.borrow();
       has_inspector = state.inspector.is_some();
-      state.waker.register(cx.waker());
+      // state.waker.register(cx.waker());
     }
 
     if has_inspector {
@@ -1116,7 +1116,9 @@ impl JsRuntime {
       || pending_state.has_tick_scheduled
       || maybe_scheduling
     {
-      state.waker.wake();
+      // state.waker.wake();
+      // cx.waker().wake_by_ref();
+      return Poll::Pending;
     }
 
     if pending_state.has_pending_module_evaluation {

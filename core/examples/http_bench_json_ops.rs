@@ -171,21 +171,8 @@ fn main() {
     .enable_io()
     .build()
     .unwrap();
-  let taskset = tokio::task::LocalSet::new();
+//  let taskset = tokio::task::LocalSet::new();
 
-  let future = async move {
-    js_runtime
-      .execute_script(
-        "http_bench_json_ops.js",
-        include_str!("http_bench_json_ops.js"),
-      )
-      .unwrap();
-    tokio::task::spawn_local(
-      async move { js_runtime.run_event_loop(false).await },
-    )
-    .await
-  };
-  let _ = taskset.block_on(&runtime, future).unwrap();
   // let future = async move {
   //   js_runtime
   //     .execute_script(
@@ -193,7 +180,20 @@ fn main() {
   //       include_str!("http_bench_json_ops.js"),
   //     )
   //     .unwrap();
-  //   js_runtime.run_event_loop(false).await
+  //   tokio::task::spawn_local(
+  //     async move { js_runtime.run_event_loop(false).await },
+  //   )
+  //   .await
   // };
-  // runtime.block_on(future).unwrap();
+  // let _ = taskset.block_on(&runtime, future).unwrap();
+  let future = async move {
+    js_runtime
+      .execute_script(
+        "http_bench_json_ops.js",
+        include_str!("http_bench_json_ops.js"),
+      )
+      .unwrap();
+    js_runtime.run_event_loop(false).await
+  };
+  runtime.block_on(future).unwrap();
 }
