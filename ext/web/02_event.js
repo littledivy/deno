@@ -139,6 +139,8 @@
   const _dispatched = Symbol("[[dispatched]]");
   const _isTrusted = Symbol("[[isTrusted]]");
   const _path = Symbol("[[path]]");
+  // internal.
+  const _skipInternalInit = Symbol("[[skipSlowInit]]");
 
   class Event {
     constructor(type, eventInitDict = {}) {
@@ -152,29 +154,48 @@
       this[_isTrusted] = false;
       this[_path] = [];
 
-      webidl.requiredArguments(arguments.length, 1, {
-        prefix: "Failed to construct 'Event'",
-      });
-      type = webidl.converters.DOMString(type, {
-        prefix: "Failed to construct 'Event'",
-        context: "Argument 1",
-      });
-      const eventInit = eventInitConverter(eventInitDict, {
-        prefix: "Failed to construct 'Event'",
-        context: "Argument 2",
-      });
-      this[_attributes] = {
-        type,
-        ...eventInit,
-        currentTarget: null,
-        eventPhase: Event.NONE,
-        target: null,
-        timeStamp: DateNow(),
-      };
-      ReflectDefineProperty(this, "isTrusted", {
-        enumerable: true,
-        get: isTrusted,
-      });
+      if (!eventInitDict[_skipInternalInit]) {
+        webidl.requiredArguments(arguments.length, 1, {
+          prefix: "Failed to construct 'Event'",
+        });
+        type = webidl.converters.DOMString(type, {
+          prefix: "Failed to construct 'Event'",
+          context: "Argument 1",
+        });
+        const eventInit = eventInitConverter(eventInitDict, {
+          prefix: "Failed to construct 'Event'",
+          context: "Argument 2",
+        });
+        this[_attributes] = {
+          type,
+          ...eventInit,
+          currentTarget: null,
+          eventPhase: Event.NONE,
+          target: null,
+          timeStamp: DateNow(),
+        };
+        // [LegacyUnforgeable]
+        ReflectDefineProperty(this, "isTrusted", {
+          enumerable: true,
+          get: isTrusted,
+        });
+      } else {
+        this[_attributes] = {
+          type,
+          data: eventInitDict.data ?? null,
+          bubbles: eventInitDict.bubbles ?? false,
+          cancelable: eventInitDict.cancelable ?? false,
+          composed: eventInitDict.composed ?? false,
+          currentTarget: null,
+          eventPhase: Event.NONE,
+          target: null,
+          timeStamp: 0,
+          // timeStamp: DateNow(),
+        };
+        // TODO(@littledivy): Not spec compliant but performance is hurt badly
+        // for users of `_skipInternalInit`.
+        this.isTrusted = false;
+      }
     }
 
     [SymbolFor("Deno.privateCustomInspect")](inspect) {
@@ -530,9 +551,10 @@
     setDispatched(eventImpl, true);
 
     targetOverride = targetOverride ?? targetImpl;
-    const eventRelatedTarget = hasRelatedTarget(eventImpl)
-      ? eventImpl.relatedTarget
-      : null;
+    // const eventRelatedTarget = hasRelatedTarget(eventImpl)
+    //   ? eventImpl.relatedTarget
+    //   : null;
+    const eventRelatedTarget = null;
     let relatedTarget = retarget(eventRelatedTarget, targetImpl);
 
     if (targetImpl !== relatedTarget || targetImpl === eventRelatedTarget) {
@@ -1191,6 +1213,7 @@
         bubbles: eventInitDict?.bubbles ?? false,
         cancelable: eventInitDict?.cancelable ?? false,
         composed: eventInitDict?.composed ?? false,
+        [_skipInternalInit]: eventInitDict?.[_skipInternalInit],
       });
 
       this.data = eventInitDict?.data ?? null;
@@ -1489,5 +1512,7 @@
     ProgressEvent,
     PromiseRejectionEvent,
     reportError,
+    _skipInternalInit,
+    dispatch,
   };
 })(this);
