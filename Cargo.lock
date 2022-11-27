@@ -1265,6 +1265,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "deno_wasi"
+version = "0.1.0"
+dependencies = [
+ "deno_core",
+ "rand",
+]
+
+[[package]]
 name = "deno_web"
 version = "0.110.0"
 dependencies = [
