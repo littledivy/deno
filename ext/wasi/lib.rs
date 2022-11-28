@@ -1,14 +1,27 @@
 // Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
 
+use deno_core::error::{type_error, AnyError};
 use deno_core::include_js_files;
 use deno_core::op;
+use deno_core::serde_v8;
+use deno_core::v8;
 use deno_core::Extension;
-use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
+use deno_core::OpState;
+use deno_core::ResourceId;
+use rand::{rngs::StdRng, Rng, SeedableRng};
+use std::borrow::Cow;
+use std::cell::Cell;
 use std::cell::RefCell;
+use std::collections::HashMap;
+use std::mem::transmute;
 use std::path::PathBuf;
+use std::ptr::NonNull;
 
 const ERRNO_SUCCESS: i32 = 0;
 const ERRNO_NOSYS: i32 = 52;
+
+const FILETYPE_CHARACTER_DEVICE: i32 = 2;
+const FDFLAGS_APPEND: i32 = 0x0001;
 
 thread_local!(static RNG: RefCell<StdRng>  = RefCell::new(StdRng::from_entropy()));
 
@@ -19,6 +32,112 @@ pub fn init() -> Extension {
       "00_wasi.js",
     ))
     .build()
+}
+
+struct FileDescriptor {
+  rid: ResourceId,
+  type_: i32,
+  flags: i32,
+}
+
+struct WasiContext {
+  /// An array of strings that the WebAssembly instance will see as command-line
+  /// arguments.
+  ///
+  /// The first argument is the virtual path to the command itself.
+  args: Vec<String>,
+  /// An object of string keys mapped to string values that the WebAssembly module
+  /// will see as its environment.
+  env: HashMap<String, String>,
+  /// Determines if calls to exit from within the WebAssembly module will terminate
+  /// the proess or return.
+  exit_on_return: bool,
+  fds: Vec<FileDescriptor>,
+  memory: Cell<Option<NonNull<v8::WasmMemoryObject>>>,
+}
+
+impl deno_core::Resource for WasiContext {
+  fn name(&self) -> Cow<str> {
+    "wasiContext".into()
+  }
+}
+
+#[op]
+fn op_wasi_create(
+  state: &mut OpState,
+  args: Vec<String>,
+  env: HashMap<String, String>,
+  exit_on_return: bool,
+  stdin: ResourceId,
+  stdout: ResourceId,
+  stderr: ResourceId,
+) -> ResourceId {
+  let ctx = WasiContext {
+    args,
+    env,
+    exit_on_return,
+    fds: vec![
+      FileDescriptor {
+        rid: stdin,
+        type_: FILETYPE_CHARACTER_DEVICE,
+        flags: FDFLAGS_APPEND,
+      },
+      FileDescriptor {
+        rid: stdout,
+        type_: FILETYPE_CHARACTER_DEVICE,
+        flags: FDFLAGS_APPEND,
+      },
+      FileDescriptor {
+        rid: stderr,
+        type_: FILETYPE_CHARACTER_DEVICE,
+        flags: FDFLAGS_APPEND,
+      },
+    ],
+    memory: Cell::new(None),
+  };
+  state.resource_table.add(ctx)
+}
+
+#[op(v8)]
+fn op_wasi_set_memory(
+  scope: &mut v8::HandleScope,
+  state: &mut OpState,
+  rid: ResourceId,
+  memory: serde_v8::Value,
+) -> Result<(), AnyError> {
+  let ctx = state.resource_table.get::<WasiContext>(rid)?;
+
+  let memory =
+    v8::Local::<v8::WasmMemoryObject>::try_from(memory.v8_value).unwrap();
+  let global = v8::Global::new(scope, memory).into_raw();
+
+  ctx.memory.set(Some(global));
+  Ok(())
+}
+
+fn get_memory_fallback(
+  state: &mut OpState,
+  rid: ResourceId,
+) -> Result<&mut [u8], AnyError> {
+  let ctx = state.resource_table.get::<WasiContext>(rid)?;
+  let global = ctx
+    .memory
+    .get()
+    .ok_or_else(|| type_error("Memory not set for WASI context"))?;
+
+  // SAFETY: `v8::Local` is always non-null pointer; the `HandleScope` is
+  // already on the stack, but we don't have access to it.
+  let memory_object = unsafe {
+    transmute::<NonNull<v8::WasmMemoryObject>, v8::Local<v8::WasmMemoryObject>>(
+      global,
+    )
+  };
+
+  let backing_store = memory_object.buffer().get_backing_store();
+  let ptr = backing_store.data().unwrap().as_ptr() as *mut u8;
+  let len = backing_store.byte_length();
+  // SAFETY: `ptr` is a valid pointer to `len` bytes.
+  Ok(unsafe { std::slice::from_raw_parts_mut(ptr, len) })
 }
 
 #[op(wasm)]
