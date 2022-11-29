@@ -140,22 +140,44 @@ fn get_memory_fallback(
   Ok(unsafe { std::slice::from_raw_parts_mut(ptr, len) })
 }
 
-#[op(wasm)]
-fn op_args_get(
-  argv_offset: i32,
-  argv_buffer_offset: i32,
-  memory: Option<&mut [u8]>,
-) -> i32 {
-  ERRNO_SUCCESS
+macro_rules! wasi {
+  (
+    $memory_arg:ident,
+    $(fn $name:ident(
+      $($arg:ident: $arg_ty:ty),*,
+    ) -> $ret:ty {
+      $($body:tt)*
+    }),* $(,)?
+  ) => {
+    $(
+      #[op(wasm)]
+      fn $name(
+        state: &mut OpState,
+        rid: ResourceId,
+        $($arg: $arg_ty),*,
+        $memory_arg: Option<&mut [u8]>,
+      ) -> $ret {
+        let $memory_arg = $memory_arg.unwrap_or_else(|| get_memory_fallback(state, rid).unwrap());
+        $($body)*
+      }
+    )*
+  }
 }
 
-#[op(wasm)]
-fn op_args_sizes_get(
-  argc_offset: i32,
-  argv_buffer_size_offset: i32,
-  memory: Option<&mut [u8]>,
-) -> i32 {
-  ERRNO_SUCCESS
+wasi! {
+  memory,
+  fn op_args_get(
+    argv_offset: i32,
+    argv_buffer_offset: i32,
+  ) -> i32 {
+    ERRNO_SUCCESS
+  },
+  fn op_args_sizes_get(
+    argc_offset: i32,
+    argv_buffer_size_offset: i32,
+  ) -> i32 {
+    ERRNO_SUCCESS
+  }
 }
 
 #[op(wasm)]
