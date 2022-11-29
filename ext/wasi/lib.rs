@@ -161,42 +161,42 @@ macro_rules! wasi {
 
 wasi! {
   memory,
-  fn op_args_get(
+  fn op_wasi_args_get(
     argv_offset: i32,
     argv_buffer_offset: i32,
   ) -> i32 {
     ERRNO_SUCCESS
   },
 
-  fn op_args_sizes_get(
+  fn op_wasi_args_sizes_get(
     argc_offset: i32,
     argv_buffer_size_offset: i32,
   ) -> i32 {
     ERRNO_SUCCESS
   },
 
-  fn op_environ_get(
+  fn op_wasi_environ_get(
     environ_offset: i32,
     environ_buffer_offset: i32,
   ) -> i32 {
     ERRNO_SUCCESS
   },
 
-  fn op_environ_sizes_get(
+  fn op_wasi_environ_sizes_get(
     environ_count_offset: i32,
     environ_size_offset: i32,
   ) -> i32 {
     ERRNO_SUCCESS
   },
 
-  fn op_clock_res_get(
+  fn op_wasi_clock_res_get(
     clock_id: i32,
     resolution: i32,
   ) -> i32 {
     ERRNO_SUCCESS
   },
 
-  fn op_clock_time_get(
+  fn op_wasi_clock_time_get(
     clock_id: i32,
     precision: u64,
     time: i32,
@@ -204,11 +204,11 @@ wasi! {
     ERRNO_SUCCESS
   },
 
-  fn op_fd_fdstat_get(_fd: i32, _buf: i32, ) -> i32 {
+  fn op_wasi_fd_fdstat_get(_fd: i32, _buf: i32, ) -> i32 {
     ERRNO_NOSYS
   },
 
-  fn op_fd_pread(
+  fn op_wasi_fd_pread(
     _fd: i32,
     _iovs: i32,
     _iovs_len: i32,
@@ -218,11 +218,11 @@ wasi! {
     ERRNO_NOSYS
   },
 
-  fn op_fd_prestat_get(_fd: i32, _buf: i32, ) -> i32 {
+  fn op_wasi_fd_prestat_get(_fd: i32, _buf: i32, ) -> i32 {
     ERRNO_NOSYS
   },
 
-  fn op_fd_prestat_dir_name(
+  fn op_wasi_fd_prestat_dir_name(
     _fd: i32,
     _path: i32,
     _path_len: i32,
@@ -230,7 +230,7 @@ wasi! {
     ERRNO_NOSYS
   },
 
-  fn op_fd_pwrite(
+  fn op_wasi_fd_pwrite(
     _fd: i32,
     _ciovs: i32,
     _ciovs_len: i32,
@@ -240,7 +240,7 @@ wasi! {
     ERRNO_NOSYS
   },
 
-  fn op_fd_read(
+  fn op_wasi_fd_read(
     _fd: i32,
     _iovs: i32,
     _iovs_len: i32,
@@ -249,7 +249,7 @@ wasi! {
     ERRNO_NOSYS
   },
 
-  fn op_fd_readdir(
+  fn op_wasi_fd_readdir(
     _fd: i32,
     _buf: i32,
     _buf_len: i32,
@@ -259,7 +259,7 @@ wasi! {
     ERRNO_NOSYS
   },
 
-  fn op_fd_seek(
+  fn op_wasi_fd_seek(
     _fd: i32,
     _offset: i64,
     _whence: i32,
@@ -268,12 +268,12 @@ wasi! {
     ERRNO_NOSYS
   },
 
-  fn op_fd_tell(_fd: i32, _offset: i32, ) -> i32 {
+  fn op_wasi_fd_tell(_fd: i32, _offset: i32, ) -> i32 {
     ERRNO_NOSYS
   },
 
 
-  fn op_fd_write(
+  fn op_wasi_fd_write(
     _fd: i32,
     _ciovs: i32,
     _ciovs_len: i32,
@@ -283,7 +283,7 @@ wasi! {
   },
 
 
-  fn op_path_create_directory(
+  fn op_wasi_path_create_directory(
     _fd: i32,
     _path_ptr: i32,
     _path_len: i32,
@@ -292,7 +292,7 @@ wasi! {
   },
 
 
-  fn op_path_filestat_get(
+  fn op_wasi_path_filestat_get(
     _fd: i32,
     _flags: i32,
     _path_ptr: i32,
@@ -302,7 +302,7 @@ wasi! {
     ERRNO_NOSYS
   },
 
-  fn op_path_link(
+  fn op_wasi_path_link(
     _old_fd: i32,
     _old_flags: i32,
     _old_path_ptr: i32,
@@ -314,7 +314,7 @@ wasi! {
     ERRNO_NOSYS
   },
 
-  fn op_path_open(
+  fn op_wasi_path_open(
     _fd: i32,
     _dirflags: i32,
     _path_ptr: i32,
@@ -328,7 +328,7 @@ wasi! {
     ERRNO_NOSYS
   },
 
-  fn op_path_readlink(
+  fn op_wasi_path_readlink(
     _fd: i32,
     _path_ptr: i32,
     _path_len: i32,
@@ -340,7 +340,7 @@ wasi! {
   },
 
 
-  fn op_path_remove_directory(
+  fn op_wasi_path_remove_directory(
     _fd: i32,
     _path_ptr: i32,
     _path_len: i32,
@@ -349,7 +349,7 @@ wasi! {
   },
 
 
-  fn op_path_rename(
+  fn op_wasi_path_rename(
     _old_fd: i32,
     _old_path_ptr: i32,
     _old_path_len: i32,
@@ -360,7 +360,7 @@ wasi! {
     ERRNO_NOSYS
   },
 
-  fn op_path_symlink(
+  fn op_wasi_path_symlink(
     _old_path_ptr: i32,
     _old_path_len: i32,
     _fd: i32,
@@ -370,7 +370,7 @@ wasi! {
     ERRNO_NOSYS
   },
 
-  fn op_path_unlink_file(
+  fn op_wasi_path_unlink_file(
     _fd: i32,
     _path_ptr: i32,
     _path_len: i32,
@@ -378,7 +378,7 @@ wasi! {
     ERRNO_NOSYS
   },
 
-  fn op_random_get(
+  fn op_wasi_random_get(
     buffer_offset: i32,
     buffer_len: i32,
   ) -> i32 {
@@ -394,17 +394,17 @@ wasi! {
 
   // Non-memory ops
 
-  fn op_fd_renumber(_from: i32, _to: i32,) -> i32 {
+  fn op_wasi_fd_renumber(_from: i32, _to: i32,) -> i32 {
     ERRNO_NOSYS
   },
 
 
-  fn op_fd_fdstat_set_flags(_fd: i32, _flags: i32,) -> i32 {
+  fn op_wasi_fd_fdstat_set_flags(_fd: i32, _flags: i32,) -> i32 {
     ERRNO_NOSYS
   },
 
 
-  fn op_fd_fdstat_set_rights(
+  fn op_wasi_fd_fdstat_set_rights(
     _fd: i32,
     _fs_rights_base: u64,
     _fs_rights_inheriting: u64,
@@ -413,17 +413,17 @@ wasi! {
   },
 
 
-  fn op_fd_filestat_get(_fd: i32, _buf: i32, ) -> i32 {
+  fn op_wasi_fd_filestat_get(_fd: i32, _buf: i32, ) -> i32 {
     ERRNO_NOSYS
   },
 
 
-  fn op_fd_filestat_set_size(_fd: i32, _size: u64,) -> i32 {
+  fn op_wasi_fd_filestat_set_size(_fd: i32, _size: u64,) -> i32 {
     ERRNO_NOSYS
   },
 
 
-  fn op_fd_filestat_set_times(
+  fn op_wasi_fd_filestat_set_times(
     _fd: i32,
     _atim: u64,
     _mtim: u64,
@@ -433,31 +433,31 @@ wasi! {
   },
 
 
-  fn op_fd_advise(_fd: i32, _offset: u64, _len: u64, _advice: i32,) -> i32 {
+  fn op_wasi_fd_advise(_fd: i32, _offset: u64, _len: u64, _advice: i32,) -> i32 {
     ERRNO_NOSYS
   },
 
 
-  fn op_fd_allocate(_fd: i32, _offset: u64, _len: u64,) -> i32 {
+  fn op_wasi_fd_allocate(_fd: i32, _offset: u64, _len: u64,) -> i32 {
     ERRNO_NOSYS
   },
 
 
-  fn op_fd_close(_fd: i32,) -> i32 {
+  fn op_wasi_fd_close(_fd: i32,) -> i32 {
     ERRNO_NOSYS
   },
 
 
-  fn op_fd_datasync(_fd: i32,) -> i32 {
+  fn op_wasi_fd_datasync(_fd: i32,) -> i32 {
     ERRNO_NOSYS
   },
 
 
-  fn op_fd_sync(_fd: i32,) -> i32 {
+  fn op_wasi_fd_sync(_fd: i32,) -> i32 {
     ERRNO_NOSYS
   },
 
-  fn op_path_filestat_set_times(
+  fn op_wasi_path_filestat_set_times(
     _fd: i32,
     _flags: i32,
     _path_ptr: i32,
@@ -469,7 +469,7 @@ wasi! {
     ERRNO_NOSYS
   },
 
-  fn op_sock_recv(
+  fn op_wasi_sock_recv(
     _fd: i32,
     _riDataOffset: i32,
     _riDataLength: i32,
@@ -480,7 +480,7 @@ wasi! {
     ERRNO_NOSYS
   },
 
-  fn op_sock_send(
+  fn op_wasi_sock_send(
     _fd: i32,
     _siDataOffset: i32,
     _siDataLength: i32,
@@ -490,38 +490,38 @@ wasi! {
     ERRNO_NOSYS
   },
 
-  fn op_sock_shutdown(_fd: i32, _how: i32,) -> i32 {
+  fn op_wasi_sock_shutdown(_fd: i32, _how: i32,) -> i32 {
     ERRNO_NOSYS
   },
 }
 
 #[op]
-fn op_poll_oneoff() -> i32 {
+fn op_wasi_poll_oneoff() -> i32 {
   ERRNO_NOSYS
 }
 
 #[op]
-fn op_proc_exit(rval: i32) -> i32 {
+fn op_wasi_proc_exit(rval: i32) -> i32 {
   std::process::exit(0);
 }
 
 #[op]
-fn op_proc_raise() -> i32 {
+fn op_wasi_proc_raise() -> i32 {
   ERRNO_NOSYS
 }
 
 #[op]
-fn op_sched_yield() -> i32 {
+fn op_wasi_sched_yield() -> i32 {
   ERRNO_SUCCESS
 }
 
 pub fn init() -> Extension {
   let mut ops = wasm_ops();
   ops.extend([
-    op_poll_oneoff::decl(),
-    op_proc_exit::decl(),
-    op_proc_raise::decl(),
-    op_sched_yield::decl(),
+    op_wasi_poll_oneoff::decl(),
+    op_wasi_proc_exit::decl(),
+    op_wasi_proc_raise::decl(),
+    op_wasi_sched_yield::decl(),
     op_wasi_create::decl(),
     op_wasi_set_memory::decl(),
   ]);
