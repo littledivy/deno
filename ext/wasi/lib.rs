@@ -53,6 +53,7 @@ impl deno_core::Resource for WasiContext {
   }
 }
 
+#[op]
 fn op_wasi_create(
   state: &mut OpState,
   args: Vec<String>,
@@ -515,6 +516,16 @@ fn op_sched_yield() -> i32 {
 }
 
 pub fn init() -> Extension {
+  let mut ops = wasm_ops();
+  ops.extend([
+    op_poll_oneoff::decl(),
+    op_proc_exit::decl(),
+    op_proc_raise::decl(),
+    op_sched_yield::decl(),
+    op_wasi_create::decl(),
+    op_wasi_set_memory::decl(),
+  ]);
+
   Extension::builder()
     .js(include_js_files!(
       prefix "deno:ext/wasi",
