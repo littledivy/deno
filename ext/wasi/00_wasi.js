@@ -15,8 +15,17 @@
 
     constructor(options = {}) {
       this.#started = false;
-      this.#rid = ops.op_wasi_create();
-      this.exports = {};
+      this.#rid = ops.op_wasi_create(
+        options.args ?? [],
+        options.env ?? {},
+        options.exitOnReturn ?? true,
+        options.stdin ?? Deno.stdin.rid,
+        options.stdout ?? Deno.stdout.rid,
+        options.stderr ?? Deno.stderr.rid,
+      );
+      this.exports = {
+        // TODO
+      };
     }
 
     start(instance) {
