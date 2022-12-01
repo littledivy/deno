@@ -7,6 +7,7 @@
   const { fromFlashRequest, toInnerResponse, _flash } =
     window.__bootstrap.fetch;
   const core = window.Deno.core;
+  const ops = core.ops;
   const { Event } = window.__bootstrap.event;
   const {
     ReadableStream,
@@ -115,6 +116,7 @@
 
   let dateInterval;
   let date;
+  let recentHeads = {};
 
   // Construct an HTTP response message.
   // All HTTP/1.1 messages consist of a start-line followed by a sequence
@@ -213,7 +215,7 @@
       nwritten = respondFast(requestId, response, end);
     } else {
       // string
-      nwritten = core.ops.op_flash_respond(
+      nwritten = ops.op_flash_respond(
         server,
         requestId,
         response,
@@ -309,7 +311,7 @@
 
     const ws = resp[_ws];
     if (isStreamingResponseBody === false) {
-      const length = respBody.byteLength || core.byteLength(respBody);
+      const length = respBody.byteLength ?? core.byteLength(respBody);
       const responseStr = http1Response(
         method,
         innerResp.status ?? 200,
@@ -677,7 +679,7 @@
         nextRequestSync = () => core.ops.op_flash_next_server(serverId);
         getMethodSync = (token) => core.ops.op_flash_method(serverId, token);
         respondFast = (token, response, shutdown) =>
-          core.ops.op_flash_respond(serverId, token, response, null, shutdown);
+          core.ops.op_flash_respond(serverId, token, response, shutdown);
       }
 
       if (!dateInterval) {

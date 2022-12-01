@@ -98,12 +98,12 @@ fn op_flash_respond(
   op_state: &mut OpState,
   server_id: u32,
   token: u32,
-  response: StringOrBuffer,
+  response: &str,
   shutdown: bool,
 ) -> u32 {
   let flash_ctx = op_state.borrow_mut::<FlashContext>();
   let ctx = flash_ctx.servers.get_mut(&server_id).unwrap();
-  flash_respond(ctx, token, shutdown, &response)
+  flash_respond(ctx, token, shutdown, response.as_bytes())
 }
 
 #[op(fast)]

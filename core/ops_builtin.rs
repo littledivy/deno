@@ -285,14 +285,7 @@ fn op_is_proxy(value: serde_v8::Value) -> bool {
   value.v8_value.is_proxy()
 }
 
-#[op(v8)]
-fn op_str_byte_length(
-  scope: &mut v8::HandleScope,
-  value: serde_v8::Value,
-) -> u32 {
-  if let Ok(string) = v8::Local::<v8::String>::try_from(value.v8_value) {
-    string.utf8_length(scope) as u32
-  } else {
-    0
-  }
+#[op]
+fn op_str_byte_length(s: &str) -> u32 {
+  s.len() as u32
 }
