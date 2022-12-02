@@ -244,6 +244,8 @@ opt-level = 3
 opt-level = 3
 [profile.release.package.deno_flash2]
 opt-level = 3
+[profile.release.package.httparse]
+opt-level = 3
 [profile.release.package.deno_net]
 opt-level = 3
 [profile.release.package.deno_web]

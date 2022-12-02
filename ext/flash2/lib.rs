@@ -138,7 +138,7 @@ fn op_flash_start(
 
       tokio::task::spawn(async move {
         let mut read_buf = vec![0_u8; 1024];
-        
+
         loop {
           let mut headers = [httparse::EMPTY_HEADER; 40];
           let mut req = httparse::Request::new(&mut headers);
@@ -178,10 +178,7 @@ pub fn init<P: FlashPermissions + 'static>(unstable: bool) -> Extension {
       prefix "deno:ext/flash",
       "00_serve.js",
     ))
-    .ops(vec![
-      op_flash_start::decl(),
-      op_flash_try_write::decl(),
-    ])
+    .ops(vec![op_flash_start::decl(), op_flash_try_write::decl()])
     .state(move |op_state| {
       op_state.put(Unstable(unstable));
       Ok(())

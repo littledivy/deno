@@ -754,8 +754,8 @@
     return [new TcpConn(connRid), new Uint8Array()];
   }
 
-  window.__bootstrap.flash = {
-    createServe,
-    upgradeHttpRaw,
-  };
+  // window.__bootstrap.flash = {
+  //   createServe,
+  //   upgradeHttpRaw,
+  // };
 })(this);

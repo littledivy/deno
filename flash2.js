@@ -30,7 +30,6 @@ const {
 
 async function serve(callback, options) {
   await op_flash_start((request) => {
-    
     const response = callback(request);
     writeResponse(request, response);
   });

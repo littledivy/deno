@@ -4,12 +4,33 @@
 ((window) => {
   const core = window.Deno.core;
   const ops = core.ops;
+  const {
+    ObjectPrototypeIsPrototypeOf,
+    Uint8ArrayPrototype,
+  } = window.__bootstrap.primordials;
+  const { fromFlashRequest, toInnerResponse, _flash } =
+    window.__bootstrap.fetch;
+
+  function isSimpleResponse(innerResponse) {
+    if (innerResponse.body !== null) {
+      const responseBody = innerResponse.body.streamOrStatic?.body;
+      if (
+        typeof responseBody === "string" ||
+        ObjectPrototypeIsPrototypeOf(Uint8ArrayPrototype, responseBody)
+      ) {
+        return responseBody;
+      }
+    }
+  }
 
   function sendResponse(rid, response) {
+    const innerResponse = toInnerResponse(response);
+
     // String / TypedArray
-    if (isSimpleResponse(response)) {
-      const raw = getSimpleResponse(response);
-      writeResponse(rid, raw);
+    const simpleResponse = isSimpleResponse(innerResponse);
+    if (simpleResponse) {
+      console.log(simpleResponse)
+      writeResponse(rid, simpleResponse);
     }
 
     // ReadableStream
@@ -18,27 +39,27 @@
 
   function writeResponse(rid, raw) {
     const nwritten = ops.op_flash_try_write(rid, raw);
-    if (nwritten > 0) {
+    if (nwritten < raw.byteLength) {
       ops.op_flash_write(rid, raw);
     }
   }
 
-  async function serve(callback, options) {
-    const rid = ops.op_flash_start();
-    while (true) {
-      let request = ops.op_flash_try_next(rid);
+  const nop = () => {};
 
-      if (request === 0) {
-        request = await ops.op_flash_next(rid);
-      }
-
-      const response = await callback(request);
-
-      sendResponse(rid, response);
-    }
+  function createServe() {
+    return async function serve(callback, options) {
+      await ops.op_flash_start((requestRid) => {
+        const request = fromFlashRequest(0, requestRid, null, nop, nop, nop);
+        const response = callback(request);
+        sendResponse(requestRid, response);
+      });
+    };
   }
 
-  // window.__bootstrap.flash = {
-  //   serve,
-  // };
+  function upgradeHttpRaw(req) {}
+
+  window.__bootstrap.flash = {
+    createServe,
+    upgradeHttpRaw,
+  };
 })(this);
