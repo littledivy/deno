@@ -1073,14 +1073,14 @@ impl JsRuntime {
 
     // Event loop middlewares
     let mut maybe_scheduling = false;
-    {
-      let op_state = self.state.borrow().op_state.clone();
-      for f in &self.event_loop_middlewares {
-        if f(op_state.clone(), cx) {
-          maybe_scheduling = true;
-        }
-      }
-    }
+    // {
+    //   let op_state = self.state.borrow().op_state.clone();
+    //   for f in &self.event_loop_middlewares {
+    //     if f(op_state.clone(), cx) {
+    //       maybe_scheduling = true;
+    //     }
+    //   }
+    // }
 
     // Top level module
     self.evaluate_pending_module();

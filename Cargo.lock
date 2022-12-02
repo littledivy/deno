@@ -1062,6 +1062,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "deno_flash2"
+version = "0.15.0"
+dependencies = [
+ "deno_core",
+ "deno_tls",
+ "deno_websocket",
+ "http",
+ "httparse",
+ "libc",
+ "log",
+ "rustls",
+ "rustls-pemfile",
+ "serde",
+ "socket2",
+ "tokio",
+]
+
+[[package]]
 name = "deno_graph"
 version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1185,6 +1203,7 @@ dependencies = [
  "deno_fetch",
  "deno_ffi",
  "deno_flash",
+ "deno_flash2",
  "deno_http",
  "deno_napi",
  "deno_net",

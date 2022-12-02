@@ -1585,7 +1585,15 @@ impl deno_flash::FlashPermissions for Permissions {
     self.net.check(host, Some(api_name))
   }
 }
-
+impl deno_flash2::FlashPermissions for Permissions {
+  fn check_net<T: AsRef<str>>(
+    &mut self,
+    host: &(T, Option<u16>),
+    api_name: &str,
+  ) -> Result<(), AnyError> {
+    self.net.check(host, Some(api_name))
+  }
+}
 impl deno_node::NodePermissions for Permissions {
   fn check_read(&mut self, path: &Path) -> Result<(), AnyError> {
     self.read.check(path, None)
