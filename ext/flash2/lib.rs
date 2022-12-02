@@ -172,13 +172,24 @@ fn op_flash_try_write(
   Ok(sock.try_write(buffer)? as u32)
 }
 
+#[op]
+fn op_flash_try_write_str(
+  state: &mut OpState,
+  rid: u32,
+  raw: &str,
+) -> Result<u32, AnyError> {
+  let req = state.resource_table.take::<Request>(rid)?;
+  let sock = req.inner.borrow_mut();
+  Ok(sock.try_write(raw.as_bytes())? as u32)
+}
+
 pub fn init<P: FlashPermissions + 'static>(unstable: bool) -> Extension {
   Extension::builder()
     .js(deno_core::include_js_files!(
       prefix "deno:ext/flash",
       "00_serve.js",
     ))
-    .ops(vec![op_flash_start::decl(), op_flash_try_write::decl()])
+    .ops(vec![op_flash_start::decl(), op_flash_try_write::decl(), op_flash_try_write_str::decl()])
     .state(move |op_state| {
       op_state.put(Unstable(unstable));
       Ok(())

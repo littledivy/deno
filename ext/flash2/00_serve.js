@@ -11,33 +11,57 @@
   const { fromFlashRequest, toInnerResponse, _flash } =
     window.__bootstrap.fetch;
 
-  function isSimpleResponse(innerResponse) {
+  const TY_STRING = 1;
+  const TY_BUFFER = 2;
+
+  function responseType(innerResponse) {
     if (innerResponse.body !== null) {
       const responseBody = innerResponse.body.streamOrStatic?.body;
       if (
-        typeof responseBody === "string" ||
+        typeof responseBody === "string"
+      ) {
+        return TY_STRING;
+      } else if (
         ObjectPrototypeIsPrototypeOf(Uint8ArrayPrototype, responseBody)
       ) {
-        return responseBody;
+        return TY_BUFFER;
+      } else if (ObjectPrototypeIsPrototypeOf(
+        ReadableStreamPrototype,
+        innerResponse.body.streamOrStatic,
+      )) {
+        if (innerResponse.body.unusable()) {
+          throw new TypeError("Body is unusable.");
+        }
+
+        return TY_STREAM;
       }
     }
   }
 
   function sendResponse(rid, response) {
     const innerResponse = toInnerResponse(response);
+    const responseType = responseType(innerResponse);
 
-    // String / TypedArray
-    const simpleResponse = isSimpleResponse(innerResponse);
-    if (simpleResponse) {
-      console.log(simpleResponse)
-      writeResponse(rid, simpleResponse);
-    }
-
-    // ReadableStream
-    // TODO:
+    const simpleResponse = innerResponse.body.streamOrStatic?.body;
+    // Static response
+    if (responseType === TY_STRING) {
+      writeResponseStr(rid, simpleResponse);
+    } else if (responseType === TY_BUFFER) {
+      writeResponseBytes(rid, simpleResponse);
+    } else if (responseType === TY_STREAM) {
+      // ReadableStream
+      const stream = innerResponse.body.stream;
+    }    
   }
 
-  function writeResponse(rid, raw) {
+  function writeResponseStr(rid, raw) {
+    const nwritten = ops.op_flash_try_write_str(rid, raw);
+    if (nwritten < raw.length) {
+      ops.op_flash_write_str(rid, raw);
+    }
+  }
+
+  function writeResponseBytes(rid, raw) {
     const nwritten = ops.op_flash_try_write(rid, raw);
     if (nwritten < raw.byteLength) {
       ops.op_flash_write(rid, raw);
