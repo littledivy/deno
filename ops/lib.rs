@@ -76,10 +76,11 @@ impl Op {
   fn gen(mut self) -> TokenStream2 {
     let mut optimizer = Optimizer::new();
     match optimizer.analyze(&mut self) {
-      Ok(_) | Err(BailoutReason::MustBeSingleSegment) => {}
-      Err(BailoutReason::FastUnsupportedParamType) => {
+      Err(BailoutReason::MustBeSingleSegment)
+      | Err(BailoutReason::FastUnsupportedParamType) => {
         optimizer.fast_compatible = false;
       }
+      _ => {}
     };
 
     let Self {
@@ -385,7 +386,9 @@ fn codegen_arg(
   let ident = quote::format_ident!("{name}");
   let (pat, ty) = match arg {
     syn::FnArg::Typed(pat) => {
-      if is_optional_fast_callback_option(&pat.ty) {
+      if is_optional_fast_callback_option(&pat.ty)
+        || is_optional_wasm_memory(&pat.ty)
+      {
         return quote! { let #ident = None; };
       }
       (&pat.pat, &pat.ty)
@@ -397,10 +400,27 @@ fn codegen_arg(
     return quote! { let #ident = (); };
   }
   // Fast path for `String`
-  if is_string(&**ty) {
+  if let Some(is_ref) = is_string(&**ty) {
+    let ref_block = if is_ref {
+      quote! { let #ident = #ident.as_ref(); }
+    } else {
+      quote! {}
+    };
     return quote! {
       let #ident = match #core::v8::Local::<#core::v8::String>::try_from(args.get(#idx as i32)) {
         Ok(v8_string) => #core::serde_v8::to_utf8(v8_string, scope),
+        Err(_) => {
+          return #core::_ops::throw_type_error(scope, format!("Expected string at position {}", #idx));
+        }
+      };
+      #ref_block
+    };
+  }
+  // Fast path for `Cow<'_, str>`
+  if is_cow_str(&**ty) {
+    return quote! {
+      let #ident = match #core::v8::Local::<#core::v8::String>::try_from(args.get(#idx as i32)) {
+        Ok(v8_string) => ::std::borrow::Cow::Owned(#core::serde_v8::to_utf8(v8_string, scope)),
         Err(_) => {
           return #core::_ops::throw_type_error(scope, format!("Expected string at position {}", #idx));
         }
@@ -615,12 +635,23 @@ fn is_result(ty: impl ToTokens) -> bool {
   }
 }
 
-fn is_string(ty: impl ToTokens) -> bool {
-  tokens(ty) == "String"
+fn is_string(ty: impl ToTokens) -> Option<bool> {
+  let toks = tokens(ty);
+  if toks == "String" {
+    return Some(false);
+  }
+  if toks == "& str" {
+    return Some(true);
+  }
+  None
 }
 
 fn is_option_string(ty: impl ToTokens) -> bool {
   tokens(ty) == "Option < String >"
+}
+
+fn is_cow_str(ty: impl ToTokens) -> bool {
+  tokens(&ty).starts_with("Cow <") && tokens(&ty).ends_with("str >")
 }
 
 enum SliceType {
@@ -660,6 +691,10 @@ fn is_ptr_u8(ty: impl ToTokens) -> bool {
 
 fn is_optional_fast_callback_option(ty: impl ToTokens) -> bool {
   tokens(&ty).contains("Option < & mut FastApiCallbackOptions")
+}
+
+fn is_optional_wasm_memory(ty: impl ToTokens) -> bool {
+  tokens(&ty).contains("Option < & mut [u8]")
 }
 
 /// Detects if the type can be set using `rv.set_uint32` fast path
@@ -724,4 +759,44 @@ fn exclude_lifetime_params(
     .filter(|t| !tokens(t).starts_with('\''))
     .cloned()
     .collect::<Punctuated<GenericParam, Comma>>()
+}
+
+#[cfg(test)]
+mod tests {
+  use crate::{Attributes, Op};
+  use std::path::PathBuf;
+
+  #[testing_macros::fixture("optimizer_tests/**/*.rs")]
+  fn test_codegen(input: PathBuf) {
+    let update_expected = std::env::var("UPDATE_EXPECTED").is_ok();
+
+    let source =
+      std::fs::read_to_string(&input).expect("Failed to read test file");
+
+    let mut attrs = Attributes::default();
+    if source.contains("// @test-attr:fast") {
+      attrs.must_be_fast = true;
+    }
+    if source.contains("// @test-attr:wasm") {
+      attrs.is_wasm = true;
+      attrs.must_be_fast = true;
+    }
+
+    let item = syn::parse_str(&source).expect("Failed to parse test file");
+    let op = Op::new(item, attrs);
+
+    let expected = std::fs::read_to_string(input.with_extension("out"))
+      .expect("Failed to read expected output file");
+
+    let actual = op.gen();
+    // Validate syntax tree.
+    let tree = syn::parse2(actual).unwrap();
+    let actual = prettyplease::unparse(&tree);
+    if update_expected {
+      std::fs::write(input.with_extension("out"), actual)
+        .expect("Failed to write expected file");
+    } else {
+      assert_eq!(actual, expected);
+    }
+  }
 }

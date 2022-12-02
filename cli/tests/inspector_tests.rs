@@ -12,6 +12,7 @@ use std::io::BufRead;
 use std::pin::Pin;
 use test_util as util;
 use tokio::net::TcpStream;
+use util::http_server;
 
 mod inspector {
   use super::*;
@@ -303,7 +304,6 @@ mod inspector {
       .unwrap();
 
     let msg = ws_read_msg(&mut socket).await;
-    println!("response msg 1 {}", msg);
     assert_starts_with!(msg, r#"{"id":6,"result":{"debuggerId":"#);
 
     socket
@@ -312,7 +312,6 @@ mod inspector {
       .unwrap();
 
     let msg = ws_read_msg(&mut socket).await;
-    println!("response msg 2 {}", msg);
     assert_eq!(msg, r#"{"id":31,"result":{}}"#);
 
     child.kill().unwrap();
@@ -546,6 +545,10 @@ mod inspector {
       .filter(|s| !s.starts_with("Deno "));
 
     assert_stderr_for_inspect(&mut stderr_lines);
+    assert_eq!(
+      &stdout_lines.next().unwrap(),
+      "exit using ctrl+d, ctrl+c, or close()"
+    );
 
     assert_inspector_messages(
     &mut socket_tx,
@@ -564,11 +567,6 @@ mod inspector {
   )
   .await;
 
-    assert_eq!(
-      &stdout_lines.next().unwrap(),
-      "exit using ctrl+d, ctrl+c, or close()"
-    );
-
     assert_inspector_messages(
     &mut socket_tx,
     &[
@@ -577,7 +575,6 @@ mod inspector {
     &mut socket_rx,
     &[r#"{"id":3,"result":{}}"#], &[]
   ).await;
-
     assert_inspector_messages(
     &mut socket_tx,
     &[
@@ -587,7 +584,6 @@ mod inspector {
     &[r#"{"id":4,"result":{"result":{"type":"string","value":""#],
     &[],
   ).await;
-
     assert_inspector_messages(
     &mut socket_tx,
     &[
@@ -597,9 +593,7 @@ mod inspector {
     &[r#"{"id":5,"result":{"result":{"type":"undefined"}}}"#],
     &[r#"{"method":"Runtime.consoleAPICalled"#],
   ).await;
-
     assert_eq!(&stderr_lines.next().unwrap(), "done");
-
     drop(stdin);
     child.wait().unwrap();
   }
@@ -905,6 +899,26 @@ mod inspector {
     assert_eq!(&stdout_lines.next().unwrap(), "hello");
     assert_eq!(&stdout_lines.next().unwrap(), "world");
 
+    assert_inspector_messages(
+      &mut socket_tx,
+      &[],
+      &mut socket_rx,
+      &[],
+      &[
+        r#"{"method":"Debugger.resumed","params":{}}"#,
+        r#"{"method":"Runtime.consoleAPICalled","#,
+        r#"{"method":"Runtime.consoleAPICalled","#,
+        r#"{"method":"Runtime.executionContextDestroyed","params":{"executionContextId":1}}"#,
+      ],
+    )
+    .await;
+    let line = &stdout_lines.next().unwrap();
+
+    assert_eq!(
+      line,
+      "Program finished. Waiting for inspector to disconnect to exit the process..."
+    );
+
     child.kill().unwrap();
     child.wait().unwrap();
   }
@@ -1116,6 +1130,179 @@ mod inspector {
     );
     profile["samples"].as_array().unwrap();
     profile["nodes"].as_array().unwrap();
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+  }
+
+  #[tokio::test]
+  async fn inspector_break_on_first_line_npm_esm() {
+    let _server = http_server();
+
+    let mut child = util::deno_cmd()
+      .arg("run")
+      .arg("--quiet")
+      .arg(inspect_flag_with_unique_port("--inspect-brk"))
+      .arg("npm:@denotest/bin/cli-esm")
+      .arg("this")
+      .arg("is")
+      .arg("a")
+      .arg("test")
+      .envs(util::env_vars_for_npm_tests())
+      .stdout(std::process::Stdio::piped())
+      .stderr(std::process::Stdio::piped())
+      .spawn()
+      .unwrap();
+
+    let stderr = child.stderr.as_mut().unwrap();
+    let mut stderr_lines =
+      std::io::BufReader::new(stderr).lines().map(|r| r.unwrap());
+    let ws_url = extract_ws_url_from_stderr(&mut stderr_lines);
+
+    let (socket, response) =
+      tokio_tungstenite::connect_async(ws_url).await.unwrap();
+    assert_eq!(response.status(), 101); // Switching protocols.
+
+    let (mut socket_tx, socket_rx) = socket.split();
+    let mut socket_rx = socket_rx
+      .map(|msg| msg.unwrap().to_string())
+      .filter(|msg| {
+        let pass = !msg.starts_with(r#"{"method":"Debugger.scriptParsed","#);
+        futures::future::ready(pass)
+      })
+      .boxed_local();
+
+    let stdout = child.stdout.as_mut().unwrap();
+    let mut stdout_lines =
+      std::io::BufReader::new(stdout).lines().map(|r| r.unwrap());
+
+    assert_stderr_for_inspect_brk(&mut stderr_lines);
+
+    assert_inspector_messages(
+      &mut socket_tx,
+      &[
+        r#"{"id":1,"method":"Runtime.enable"}"#,
+        r#"{"id":2,"method":"Debugger.enable"}"#,
+      ],
+      &mut socket_rx,
+      &[
+        r#"{"id":1,"result":{}}"#,
+        r#"{"id":2,"result":{"debuggerId":"#,
+      ],
+      &[
+        r#"{"method":"Runtime.executionContextCreated","params":{"context":{"id":1,"#,
+      ],
+    )
+    .await;
+
+    assert_inspector_messages(
+      &mut socket_tx,
+      &[r#"{"id":3,"method":"Runtime.runIfWaitingForDebugger"}"#],
+      &mut socket_rx,
+      &[r#"{"id":3,"result":{}}"#],
+      &[r#"{"method":"Debugger.paused","#],
+    )
+    .await;
+
+    assert_inspector_messages(
+      &mut socket_tx,
+      &[r#"{"id":4,"method":"Debugger.resume"}"#],
+      &mut socket_rx,
+      &[r#"{"id":4,"result":{}}"#],
+      &[],
+    )
+    .await;
+
+    assert_eq!(&stdout_lines.next().unwrap(), "this");
+    assert_eq!(&stdout_lines.next().unwrap(), "is");
+    assert_eq!(&stdout_lines.next().unwrap(), "a");
+    assert_eq!(&stdout_lines.next().unwrap(), "test");
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+  }
+
+  #[tokio::test]
+  async fn inspector_break_on_first_line_npm_cjs() {
+    let _server = http_server();
+    let mut child = util::deno_cmd()
+      .arg("run")
+      .arg("--quiet")
+      .arg(inspect_flag_with_unique_port("--inspect-brk"))
+      .arg("npm:@denotest/bin/cli-cjs")
+      .arg("this")
+      .arg("is")
+      .arg("a")
+      .arg("test")
+      .envs(util::env_vars_for_npm_tests())
+      .stdout(std::process::Stdio::piped())
+      .stderr(std::process::Stdio::piped())
+      .spawn()
+      .unwrap();
+
+    let stderr = child.stderr.as_mut().unwrap();
+    let mut stderr_lines =
+      std::io::BufReader::new(stderr).lines().map(|r| r.unwrap());
+    let ws_url = extract_ws_url_from_stderr(&mut stderr_lines);
+
+    let (socket, response) =
+      tokio_tungstenite::connect_async(ws_url).await.unwrap();
+    assert_eq!(response.status(), 101); // Switching protocols.
+
+    let (mut socket_tx, socket_rx) = socket.split();
+    let mut socket_rx = socket_rx
+      .map(|msg| msg.unwrap().to_string())
+      .filter(|msg| {
+        let pass = !msg.starts_with(r#"{"method":"Debugger.scriptParsed","#);
+        futures::future::ready(pass)
+      })
+      .boxed_local();
+
+    let stdout = child.stdout.as_mut().unwrap();
+    let mut stdout_lines =
+      std::io::BufReader::new(stdout).lines().map(|r| r.unwrap());
+
+    assert_stderr_for_inspect_brk(&mut stderr_lines);
+
+    assert_inspector_messages(
+      &mut socket_tx,
+      &[
+        r#"{"id":1,"method":"Runtime.enable"}"#,
+        r#"{"id":2,"method":"Debugger.enable"}"#,
+      ],
+      &mut socket_rx,
+      &[
+        r#"{"id":1,"result":{}}"#,
+        r#"{"id":2,"result":{"debuggerId":"#,
+      ],
+      &[
+        r#"{"method":"Runtime.executionContextCreated","params":{"context":{"id":1,"#,
+      ],
+    )
+    .await;
+
+    assert_inspector_messages(
+      &mut socket_tx,
+      &[r#"{"id":3,"method":"Runtime.runIfWaitingForDebugger"}"#],
+      &mut socket_rx,
+      &[r#"{"id":3,"result":{}}"#],
+      &[r#"{"method":"Debugger.paused","#],
+    )
+    .await;
+
+    assert_inspector_messages(
+      &mut socket_tx,
+      &[r#"{"id":4,"method":"Debugger.resume"}"#],
+      &mut socket_rx,
+      &[r#"{"id":4,"result":{}}"#],
+      &[],
+    )
+    .await;
+
+    assert_eq!(&stdout_lines.next().unwrap(), "this");
+    assert_eq!(&stdout_lines.next().unwrap(), "is");
+    assert_eq!(&stdout_lines.next().unwrap(), "a");
+    assert_eq!(&stdout_lines.next().unwrap(), "test");
 
     child.kill().unwrap();
     child.wait().unwrap();
