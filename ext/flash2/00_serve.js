@@ -14,6 +14,7 @@
   const TY_STRING = 1;
   const TY_BUFFER = 2;
 
+  // Get the type of response body.
   function responseType(innerResponse) {
     if (innerResponse.body !== null) {
       const responseBody = innerResponse.body.streamOrStatic?.body;
@@ -25,10 +26,12 @@
         ObjectPrototypeIsPrototypeOf(Uint8ArrayPrototype, responseBody)
       ) {
         return TY_BUFFER;
-      } else if (ObjectPrototypeIsPrototypeOf(
-        ReadableStreamPrototype,
-        innerResponse.body.streamOrStatic,
-      )) {
+      } else if (
+        ObjectPrototypeIsPrototypeOf(
+          ReadableStreamPrototype,
+          innerResponse.body.streamOrStatic,
+        )
+      ) {
         if (innerResponse.body.unusable()) {
           throw new TypeError("Body is unusable.");
         }
@@ -40,24 +43,49 @@
 
   function sendResponse(rid, response) {
     const innerResponse = toInnerResponse(response);
-    const responseType = responseType(innerResponse);
+    const rType = responseType(innerResponse);
 
     const simpleResponse = innerResponse.body.streamOrStatic?.body;
     // Static response
-    if (responseType === TY_STRING) {
-      writeResponseStr(rid, simpleResponse);
-    } else if (responseType === TY_BUFFER) {
+    if (rType === TY_STRING) {
+      // TODO: Create raw HTTP response from innerResponse.
+      writeResponseStr(rid, innerResponse.status ?? 200, simpleResponse);
+    } else if (rType === TY_BUFFER) {
       writeResponseBytes(rid, simpleResponse);
-    } else if (responseType === TY_STREAM) {
+    } else if (rType === TY_STREAM) {
       // ReadableStream
       const stream = innerResponse.body.stream;
-    }    
+    }
   }
 
-  function writeResponseStr(rid, raw) {
+  function sendResponse2(rid, response) {
+    const innerResponse = toInnerResponse(response);
+    const rType = responseType(innerResponse);
+
+    const simpleResponse = innerResponse.body.streamOrStatic?.body;
+    // Static response
+    if (rType === TY_STRING) {
+      // TODO: Create raw HTTP response from innerResponse.
+      writeResponseStr2(rid, simpleResponse);
+    } else if (rType === TY_BUFFER) {
+      writeResponseBytes(rid, simpleResponse);
+    } else if (rType === TY_STREAM) {
+      // ReadableStream
+      const stream = innerResponse.body.stream;
+    }
+  }
+
+  function writeResponseStr(rid, status, str) {
+    const nwritten = ops.op_flash_try_write_status_str(rid, status, str);
+    if (nwritten < str.length) {
+      //ops.op_flash_write_str(rid, status, str);
+    }
+  }
+
+  function writeResponseStr2(rid, raw) {
     const nwritten = ops.op_flash_try_write_str(rid, raw);
     if (nwritten < raw.length) {
-      ops.op_flash_write_str(rid, raw);
+      //ops.op_flash_write_str(rid, raw);
     }
   }
 
@@ -80,10 +108,21 @@
     };
   }
 
+  function createServe2() {
+    return async function serve(callback, options) {
+      await ops.op_flash_start((requestRid) => {
+        const request = fromFlashRequest(0, requestRid, null, nop, nop, nop);
+        const response = callback(request);
+        sendResponse2(requestRid, response);
+      });
+    };
+  }
+
   function upgradeHttpRaw(req) {}
 
   window.__bootstrap.flash = {
     createServe,
+    createServe2,
     upgradeHttpRaw,
   };
 })(this);

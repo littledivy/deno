@@ -183,13 +183,38 @@ fn op_flash_try_write_str(
   Ok(sock.try_write(raw.as_bytes())? as u32)
 }
 
+#[op]
+fn op_flash_try_write_status_str(
+  state: &mut OpState,
+  rid: u32,
+  status: u32,
+  data: &str,
+) -> Result<u32, AnyError> {
+  let req = state.resource_table.take::<Request>(rid)?;
+  let sock = req.inner.borrow_mut();
+  let response = format!(
+    "HTTP/1.1 {} OK\r\nDate: {}\r\ncontent-type: {}\r\nContent-Length: {}\r\n\r\n{}",
+    status,
+    "Fri, 02 Dec 2022 22:17:19 GMT",
+    "text/plain;charset=utf-8",
+    data.len(),
+    data
+  );
+  Ok(sock.try_write(response.as_bytes())? as u32)
+}
+
 pub fn init<P: FlashPermissions + 'static>(unstable: bool) -> Extension {
   Extension::builder()
     .js(deno_core::include_js_files!(
       prefix "deno:ext/flash",
       "00_serve.js",
     ))
-    .ops(vec![op_flash_start::decl(), op_flash_try_write::decl(), op_flash_try_write_str::decl()])
+    .ops(vec![
+      op_flash_start::decl(),
+      op_flash_try_write_status_str::decl(),
+      op_flash_try_write::decl(),
+      op_flash_try_write_str::decl(),
+    ])
     .state(move |op_state| {
       op_state.put(Unstable(unstable));
       Ok(())
