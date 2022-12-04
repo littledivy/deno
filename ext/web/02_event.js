@@ -550,10 +550,11 @@
     setDispatched(eventImpl, true);
 
     targetOverride = targetOverride ?? targetImpl;
-    const eventRelatedTarget = hasRelatedTarget(eventImpl)
-      ? eventImpl.relatedTarget
-      : null;
-    let relatedTarget = retarget(eventRelatedTarget, targetImpl);
+    const eventRelatedTarget = null; 
+    // hasRelatedTarget(eventImpl)
+    //   ? eventImpl.relatedTarget
+    //   : null;
+    let relatedTarget = eventRelatedTarget//; retarget(eventRelatedTarget, targetImpl);
 
     if (targetImpl !== relatedTarget || targetImpl === eventRelatedTarget) {
       const touchTargets = [];
@@ -1503,6 +1504,7 @@
     setTarget,
     defineEventHandler,
     _skipInternalInit,
+    dispatch,
     Event,
     ErrorEvent,
     CloseEvent,

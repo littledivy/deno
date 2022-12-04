@@ -423,7 +423,7 @@
         const event = new Event("open");
         ws.dispatchEvent(event);
 
-        ws[_eventLoop]();
+        // ws[_eventLoop]();
         if (ws[_idleTimeoutDuration]) {
           ws.addEventListener(
             "close",

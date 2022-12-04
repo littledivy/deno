@@ -9,6 +9,9 @@ use deno_core::futures::SinkExt;
 use deno_core::futures::StreamExt;
 use deno_core::include_js_files;
 use deno_core::op;
+use deno_core::serde_v8;
+use deno_core::v8;
+use deno_core::StringOrBuffer;
 
 use deno_core::url;
 use deno_core::AsyncRefCell;
@@ -554,41 +557,112 @@ pub enum NextEventResponse {
   Error(String),
   Closed,
 }
+use std::future::Future;
 
-#[op]
-pub async fn op_ws_next_event(
-  state: Rc<RefCell<OpState>>,
+#[derive(Clone, Copy)]
+struct JsCb {
+  isolate: *mut v8::Isolate,
+  js_cb: *mut v8::Function,
+  context: *mut v8::Context,
+}
+
+impl JsCb {
+  fn call(&self, kind: u32, value: Option<StringOrBuffer>) {
+    let js_cb = unsafe { &mut *self.js_cb };
+    let isolate = unsafe { &mut *self.isolate };
+    let context = unsafe {
+      std::mem::transmute::<*mut v8::Context, v8::Local<v8::Context>>(
+        self.context,
+      )
+    };
+    let recv = v8::undefined(isolate).into();
+    let mut scope = unsafe { v8::CallbackScope::new(context) };// &mut v8::HandleScope::with_context(isolate, context);
+    let scope = &mut v8::HandleScope::new(&mut scope);
+    let kind = v8::Number::new(scope, kind as _).into();
+    let value = serde_v8::to_v8(scope, &value).unwrap().into();
+    let args = &[kind, value];
+    let _ = js_cb.call(scope, recv, args);
+  }
+}
+
+unsafe impl Send for JsCb {}
+unsafe impl Sync for JsCb {}
+
+#[derive(Clone, Copy)]
+struct SharedOpState(*mut OpState);
+unsafe impl Send for SharedOpState {}
+unsafe impl Sync for SharedOpState {}
+
+#[repr(u32)]
+enum NextEventKind {
+  String = 0,
+  Binary = 1,
+  Close = 2,
+  Ping = 3,
+  Pong = 4,
+  Error = 5,
+  Closed = 6,
+}
+
+#[op(v8)]
+fn op_ws_loop(
+  scope: &mut v8::HandleScope,
+  state: &mut OpState,
   rid: ResourceId,
-) -> Result<NextEventResponse, AnyError> {
-  let resource = state
-    .borrow_mut()
-    .resource_table
-    .get::<WsStreamResource>(rid)?;
-
-  let cancel = RcRef::map(&resource, |r| &r.cancel);
-  let val = resource.next_message(cancel).await?;
-  let res = match val {
-    Some(Ok(Message::Text(text))) => NextEventResponse::String(text),
-    Some(Ok(Message::Binary(data))) => NextEventResponse::Binary(data.into()),
-    Some(Ok(Message::Close(Some(frame)))) => NextEventResponse::Close {
-      code: frame.code.into(),
-      reason: frame.reason.to_string(),
-    },
-    Some(Ok(Message::Close(None))) => NextEventResponse::Close {
-      code: 1005,
-      reason: String::new(),
-    },
-    Some(Ok(Message::Ping(_))) => NextEventResponse::Ping,
-    Some(Ok(Message::Pong(_))) => NextEventResponse::Pong,
-    Some(Err(e)) => NextEventResponse::Error(e.to_string()),
-    None => {
-      // No message was received, presumably the socket closed while we waited.
-      // Try close the stream, ignoring any errors, and report closed status to JavaScript.
-      let _ = state.borrow_mut().resource_table.close(rid);
-      NextEventResponse::Closed
-    }
+  js_cb: serde_v8::Value,
+) -> Result<impl Future<Output = Result<(), AnyError>>, AnyError> {
+  let resource = state.resource_table.get::<WsStreamResource>(rid)?;
+  let current_context = scope.get_current_context();
+  let context = v8::Global::new(scope, current_context).into_raw();
+  let isolate: *mut v8::Isolate = &mut *scope as &mut v8::Isolate;
+  let js_cb = JsCb {
+    isolate,
+    js_cb: v8::Global::new(scope, js_cb.v8_value).into_raw().as_ptr()
+      as *mut v8::Function,
+    context: context.as_ptr(),
   };
-  Ok(res)
+
+  let state = SharedOpState(state as *mut OpState);
+  Ok(async move {
+    loop {
+      let cancel = RcRef::map(&resource, |r| &r.cancel);
+      let val = resource.next_message(cancel).await?;
+      let (kind, value) = match val {
+        Some(Ok(Message::Text(text))) => (
+          NextEventKind::String as u32,
+          Some(StringOrBuffer::String(text)),
+        ),
+        Some(Ok(Message::Binary(data))) => (
+          NextEventKind::Binary as u32,
+          Some(StringOrBuffer::Buffer(data.into())),
+        ),
+        Some(Ok(Message::Close(Some(frame)))) => {
+          let code: u16 = frame.code.into();
+          (
+            NextEventKind::Close as u32,
+            Some(StringOrBuffer::String(frame.reason.to_string())),
+          )
+        }
+        Some(Ok(Message::Close(None))) => {
+          (
+            NextEventKind::Close as u32,
+            Some(StringOrBuffer::String(String::new())),
+          )
+        }
+        Some(Ok(Message::Ping(_))) => (NextEventKind::Ping as u32, None),
+        Some(Ok(Message::Pong(_))) => (NextEventKind::Pong as u32, None),
+        Some(Err(e)) => (
+          NextEventKind::Error as u32,
+          Some(StringOrBuffer::String(e.to_string())),
+        ),
+        None => {
+          (NextEventKind::Closed as u32, None)
+        }
+      };
+      js_cb.call(kind, value);
+    }
+    Ok(())
+  })
 }
 
 pub fn init<P: WebSocketPermissions + 'static>(
@@ -607,7 +681,7 @@ pub fn init<P: WebSocketPermissions + 'static>(
       op_ws_create::decl::<P>(),
       op_ws_send::decl(),
       op_ws_close::decl(),
-      op_ws_next_event::decl(),
+      op_ws_loop::decl(),
       op_ws_send_string::decl(),
       op_ws_send_binary::decl(),
       op_ws_try_send_string::decl(),
