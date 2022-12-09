@@ -19,6 +19,7 @@ use std::future::Future;
 use std::rc::Rc;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
+use std::time::SystemTime;
 use tokio::sync::mpsc::{
   unbounded_channel, UnboundedReceiver, UnboundedSender,
 };
@@ -145,14 +146,23 @@ fn op_flash_start(
           let nread = server_socket.read(&mut read_buf).await;
           match nread {
             Ok(0) => {
+              // we need to close the socket here?
               break;
             }
             Ok(n) => {
+              // we need to append incoming bytes to buffer and deal with
+              // slow client sending lots of small packets
+              // we need to know difference between incomplete request
+              // and a bad request
               let _ = req.parse(&read_buf[..n]);
-
+              // we can't just call this and forget it - we could
+              // overload downstream. if consumer is proxying or querying
+              // a remote service, it need to be able to apply backpressure
               js_cb.call(state.add_resource(socket.clone()));
             }
-            _ => {}
+            Err(err) => {
+              println!("Error {}", err);
+            }
           }
         }
       });
@@ -180,7 +190,54 @@ fn op_flash_try_write_str(
 ) -> Result<u32, AnyError> {
   let req = state.resource_table.take::<Request>(rid)?;
   let sock = req.inner.borrow_mut();
+  // can't we use fast api strings here?
   Ok(sock.try_write(raw.as_bytes())? as u32)
+}
+
+//#[derive(Debug, Clone)]
+#[repr(transparent)]
+struct HttpDate {
+  current_date: String
+}
+
+unsafe impl Send for HttpDate {}
+
+#[op]
+//fn op_flash_start_date_loop(state: Rc<RefCell<OpState>>) {
+fn op_flash_start_date_loop(
+  state: &mut OpState,
+) {
+  // TODO: cancellation stuff.
+  //let state = SharedOpState(state as *mut OpState);
+  tokio::task::spawn(async move {
+    loop {
+      tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+      //tokio::task::sleep(1000).await;
+      {
+        let date = httpdate::fmt_http_date(SystemTime::now());
+
+        //let mut state = state.borrow_mut();
+        //let mut date = state.borrow_mut::<HttpDate>();
+        //state.
+        //let time = Utc::now();
+        println!("{}", date);
+
+        //date.current_date = time.to_rfc3339();
+        //*date = HttpDate(Utc::now());
+      }
+    }
+  });
+}
+
+#[op]
+fn op_flash_set_date (
+  state: &mut OpState,
+  from: String,
+) {
+  state.put(HttpDate { current_date: from });
+
+  //let mut date = state.borrow_mut::<HttpDate>();
+  //*date = HttpDate { current_date: from };
 }
 
 #[op]
@@ -190,17 +247,34 @@ fn op_flash_try_write_status_str(
   status: u32,
   data: &str,
 ) -> Result<u32, AnyError> {
+  //let req = state.resource_table.take::<Request>(rid)?;
+  ////let date = state.borrow::<HttpDate>();
+  //let sock = req.inner.borrow_mut();
+  //let response = format!(
+  //  "HTTP/1.1 {} OK\r\nDate: {}\r\ncontent-type: {}\r\nContent-Length: {}\r\n\r\n{}",
+  //  status,
+  //  "Fri, 02 Dec 2022 22:17:19 GMT",
+  //  //date.current_date,
+  //  "text/plain;charset=utf-8",
+  //  data.len(),
+  //  data
+  //);
+  //Ok(sock.try_write(response.as_bytes())? as u32)
+
   let req = state.resource_table.take::<Request>(rid)?;
+  //let date = state.borrow::<HttpDate>();
   let sock = req.inner.borrow_mut();
   let response = format!(
     "HTTP/1.1 {} OK\r\nDate: {}\r\ncontent-type: {}\r\nContent-Length: {}\r\n\r\n{}",
     status,
     "Fri, 02 Dec 2022 22:17:19 GMT",
+    //date.current_date,
     "text/plain;charset=utf-8",
     data.len(),
     data
   );
   Ok(sock.try_write(response.as_bytes())? as u32)
+
 }
 
 pub fn init<P: FlashPermissions + 'static>(unstable: bool) -> Extension {
@@ -214,6 +288,8 @@ pub fn init<P: FlashPermissions + 'static>(unstable: bool) -> Extension {
       op_flash_try_write_status_str::decl(),
       op_flash_try_write::decl(),
       op_flash_try_write_str::decl(),
+      //op_flash_start_date_loop::decl(),
+      op_flash_set_date::decl(),
     ])
     .state(move |op_state| {
       op_state.put(Unstable(unstable));

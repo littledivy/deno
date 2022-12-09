@@ -14,6 +14,7 @@ description = "Fast HTTP/1 server implementation for Deno"
 path = "lib.rs"
 
 [dependencies]
+httpdate = "1.0.2"
 deno_core.workspace = true
 deno_tls.workspace = true
 # For HTTP/2 and websocket upgrades

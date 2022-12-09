@@ -2,7 +2,7 @@
 const port = Bun.argv[2] || "4545";
 Bun.serve({
   fetch(_req) {
-    return new Response("Hello World");
+    return new Response("Hello, World!");
   },
   port: Number(port),
 });
