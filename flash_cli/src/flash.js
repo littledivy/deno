@@ -8,7 +8,7 @@ const {
   op_flash_try_write_status_str,
   op_flash_try_write,
   op_flash_write,
-  op_flash_set_date,
+  op_flash_start_date_loop,
 } = ops;
 
 const Types = {
@@ -86,9 +86,7 @@ Deno.serve = async (fetch, options) => {
   // async handler
 };
 
-// const timer = setInterval(() => {
-//   op_flash_set_date((new Date()).toUTCString())
-// }, 1000)
+op_flash_start_date_loop();
 
 Deno.serve(() => new Response("Hello, World!"));
 //const encoder = new TextEncoder()

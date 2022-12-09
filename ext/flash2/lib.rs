@@ -204,36 +204,21 @@ struct HttpDate {
 unsafe impl Send for HttpDate {}
 
 #[op]
-//fn op_flash_start_date_loop(state: Rc<RefCell<OpState>>) {
-fn op_flash_start_date_loop(state: &mut OpState) {
+async fn op_flash_start_date_loop(state: Rc<RefCell<OpState>>) {
   // TODO: cancellation stuff.
   //let state = SharedOpState(state as *mut OpState);
-  tokio::task::spawn(async move {
-    loop {
-      tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-      //tokio::task::sleep(1000).await;
-      {
-        let date = httpdate::fmt_http_date(SystemTime::now());
+  loop {
+    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+    {
+      let fmtted = httpdate::fmt_http_date(SystemTime::now());
 
-        //let mut state = state.borrow_mut();
-        //let mut date = state.borrow_mut::<HttpDate>();
-        //state.
-        //let time = Utc::now();
-        println!("{}", date);
-
-        //date.current_date = time.to_rfc3339();
-        //*date = HttpDate(Utc::now());
-      }
+      let mut state = state.borrow_mut();
+      let mut date = state.borrow_mut::<HttpDate>();
+      *date = HttpDate {
+        current_date: fmtted,
+      };
     }
-  });
-}
-
-#[op]
-fn op_flash_set_date(state: &mut OpState, from: String) {
-  state.put(HttpDate { current_date: from });
-
-  //let mut date = state.borrow_mut::<HttpDate>();
-  //*date = HttpDate { current_date: from };
+  }
 }
 
 #[op]
@@ -258,13 +243,13 @@ fn op_flash_try_write_status_str(
   //Ok(sock.try_write(response.as_bytes())? as u32)
 
   let req = state.resource_table.take::<Request>(rid)?;
-  //let date = state.borrow::<HttpDate>();
+  let date = state.borrow::<HttpDate>();
   let sock = req.inner.borrow_mut();
   let response = format!(
     "HTTP/1.1 {} OK\r\nDate: {}\r\ncontent-type: {}\r\nContent-Length: {}\r\n\r\n{}",
     status,
-    "Fri, 02 Dec 2022 22:17:19 GMT",
-    //date.current_date,
+    //"Fri, 02 Dec 2022 22:17:19 GMT",
+    date.current_date,
     "text/plain;charset=utf-8",
     data.len(),
     data
@@ -283,11 +268,13 @@ pub fn init<P: FlashPermissions + 'static>(unstable: bool) -> Extension {
       op_flash_try_write_status_str::decl(),
       op_flash_try_write::decl(),
       op_flash_try_write_str::decl(),
-      //op_flash_start_date_loop::decl(),
-      op_flash_set_date::decl(),
+      op_flash_start_date_loop::decl(),
     ])
     .state(move |op_state| {
       op_state.put(Unstable(unstable));
+      op_state.put(HttpDate {
+        current_date: httpdate::fmt_http_date(SystemTime::now()),
+      });
       Ok(())
     })
     .build()
