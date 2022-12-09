@@ -206,7 +206,6 @@ unsafe impl Send for HttpDate {}
 #[op]
 async fn op_flash_start_date_loop(state: Rc<RefCell<OpState>>) {
   // TODO: cancellation stuff.
-  //let state = SharedOpState(state as *mut OpState);
   loop {
     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
     {
@@ -228,27 +227,12 @@ fn op_flash_try_write_status_str(
   status: u32,
   data: &str,
 ) -> Result<u32, AnyError> {
-  //let req = state.resource_table.take::<Request>(rid)?;
-  ////let date = state.borrow::<HttpDate>();
-  //let sock = req.inner.borrow_mut();
-  //let response = format!(
-  //  "HTTP/1.1 {} OK\r\nDate: {}\r\ncontent-type: {}\r\nContent-Length: {}\r\n\r\n{}",
-  //  status,
-  //  "Fri, 02 Dec 2022 22:17:19 GMT",
-  //  //date.current_date,
-  //  "text/plain;charset=utf-8",
-  //  data.len(),
-  //  data
-  //);
-  //Ok(sock.try_write(response.as_bytes())? as u32)
-
   let req = state.resource_table.take::<Request>(rid)?;
   let date = state.borrow::<HttpDate>();
   let sock = req.inner.borrow_mut();
   let response = format!(
     "HTTP/1.1 {} OK\r\nDate: {}\r\ncontent-type: {}\r\nContent-Length: {}\r\n\r\n{}",
     status,
-    //"Fri, 02 Dec 2022 22:17:19 GMT",
     date.current_date,
     "text/plain;charset=utf-8",
     data.len(),

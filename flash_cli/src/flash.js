@@ -12,8 +12,8 @@ const {
 } = ops;
 
 const Types = {
-  Default: "default",
-  Buffer: "typedarray",
+  Default: 1,
+  Buffer: 2,
 };
 
 class Response {
@@ -48,47 +48,50 @@ function createResponseString(res) {
   return `HTTP/1.1 ${status} ${statusMessage} \r\nDate: ${now}\r\nContent-Length: ${13}\r\nContent-Type: ${contentType}\r\n\r\n${body}`;
 }
 
+function sendResponse(rid, res) {
+  if (res.type === Types.Default) {
+    op_flash_try_write_status_str(rid, res.status, res.body);
+  } else if (res.type === Types.Buffer) {
+    const nwritten = op_flash_try_write(rid, res.body);
+    if (nwritten < res.body.byteLength) {
+      op_flash_write(rid, res.body);
+    }
+  }
+}
+
 Deno.serve = async (fetch, options) => {
-  const mode = fetch.constructor.name === "AsyncFunction" ? "async" : "sync";
+  const isAsync = fetch.constructor.name === "AsyncFunction" ? true : false;
   const argLen = fetch.length;
-  if (mode === "sync") {
-    // sync handler
+
+  if (!isAsync) {
     if (argLen === 0) {
-      // fast path - sync handler with no request argument - 400k rps
       await op_flash_start((rid) => {
         const res = fetch();
-        if (res.type === Types.Default) {
-          //op_flash_try_write_str(rid, createResponseString(res))
-          // todo: return codes
-          //console.log(res.body)
-          op_flash_try_write_status_str(rid, res.status, res.body);
-          return;
-        }
-        if (res.type === Types.Buffer) {
-          const nwritten = op_flash_try_write(rid, res.body);
-          if (nwritten < res.body.byteLength) {
-            op_flash_write(rid, res.body);
-          }
-        }
+        sendResponse(rid, res);
       });
-      return;
+    } else {
+      await op_flash_start((rid) => {
+        const request = fromFlashRequest(0, rid, null, nop, nop, nop);
+        const res = fetch(request);
+        sendResponse(rid, res);
+      });
     }
-    // slow path - we pass a request object
-    await op_flash_start((rid) => {
-      const request = fromFlashRequest(0, rid, null, nop, nop, nop);
-      const res = fetch(request);
-      if (res.type === Types.Default) {
-        op_flash_try_write_str(rid, createResponseString(res));
-      }
-    });
-    return;
+  } else {
+    if (argLen === 0) {
+      await op_flash_start(async (rid) => {
+        const res = await fetch();
+        sendResponse(rid, res);
+      });
+    } else {
+      await op_flash_start(async (rid) => {
+        const request = fromFlashRequest(0, rid, null, nop, nop, nop);
+        const res = await fetch(request);
+        sendResponse(rid, res);
+      });
+    }
   }
-  // async handler
 };
 
 op_flash_start_date_loop();
 
 Deno.serve(() => new Response("Hello, World!"));
-//const encoder = new TextEncoder()
-//const u8 = encoder.encode('Hello, World!')
-//Deno.serve(() => new Response(u8))
