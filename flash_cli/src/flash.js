@@ -1,4 +1,6 @@
-const { ops } = Deno.core;
+const { ops, initializeAsyncOps } = Deno.core;
+
+initializeAsyncOps();
 
 const {
   op_flash_try_write_str,
@@ -84,9 +86,9 @@ Deno.serve = async (fetch, options) => {
   // async handler
 };
 
-const timer = setInterval(() => {
-  op_flash_set_date((new Date()).toUTCString());
-}, 1000);
+// const timer = setInterval(() => {
+//   op_flash_set_date((new Date()).toUTCString())
+// }, 1000)
 
 Deno.serve(() => new Response("Hello, World!"));
 //const encoder = new TextEncoder()

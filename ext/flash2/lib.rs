@@ -17,9 +17,9 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::future::Future;
 use std::rc::Rc;
+use std::time::SystemTime;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
-use std::time::SystemTime;
 use tokio::sync::mpsc::{
   unbounded_channel, UnboundedReceiver, UnboundedSender,
 };
@@ -112,7 +112,7 @@ impl SharedOpState {
 #[op(v8)]
 fn op_flash_start(
   scope: &mut v8::HandleScope,
-  state: &mut OpState,
+  state: Rc<RefCell<OpState>>,
   js_cb: serde_v8::Value,
 ) -> Result<impl Future<Output = Result<(), AnyError>>, AnyError> {
   let current_context = scope.get_current_context();
@@ -125,7 +125,8 @@ fn op_flash_start(
     context: context.as_ptr(),
   };
 
-  let state = SharedOpState(state as *mut OpState);
+  let op_state = { &state.borrow() as &OpState as *const OpState };
+  let state = SharedOpState(op_state as *mut OpState);
 
   Ok(async move {
     let listener = TcpListener::bind("127.0.0.1:4500").await.unwrap();
@@ -197,16 +198,14 @@ fn op_flash_try_write_str(
 //#[derive(Debug, Clone)]
 #[repr(transparent)]
 struct HttpDate {
-  current_date: String
+  current_date: String,
 }
 
 unsafe impl Send for HttpDate {}
 
 #[op]
 //fn op_flash_start_date_loop(state: Rc<RefCell<OpState>>) {
-fn op_flash_start_date_loop(
-  state: &mut OpState,
-) {
+fn op_flash_start_date_loop(state: &mut OpState) {
   // TODO: cancellation stuff.
   //let state = SharedOpState(state as *mut OpState);
   tokio::task::spawn(async move {
@@ -230,10 +229,7 @@ fn op_flash_start_date_loop(
 }
 
 #[op]
-fn op_flash_set_date (
-  state: &mut OpState,
-  from: String,
-) {
+fn op_flash_set_date(state: &mut OpState, from: String) {
   state.put(HttpDate { current_date: from });
 
   //let mut date = state.borrow_mut::<HttpDate>();
@@ -274,7 +270,6 @@ fn op_flash_try_write_status_str(
     data
   );
   Ok(sock.try_write(response.as_bytes())? as u32)
-
 }
 
 pub fn init<P: FlashPermissions + 'static>(unstable: bool) -> Extension {

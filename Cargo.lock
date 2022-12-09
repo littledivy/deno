@@ -1070,6 +1070,7 @@ dependencies = [
  "deno_websocket",
  "http",
  "httparse",
+ "httpdate",
  "libc",
  "log",
  "rustls",
@@ -1775,6 +1776,15 @@ dependencies = [
  "proc-macro2 1.0.47",
  "quote 1.0.21",
  "syn 1.0.105",
+]
+
+[[package]]
+name = "flash_cli"
+version = "0.1.0"
+dependencies = [
+ "deno_core",
+ "deno_flash2",
+ "tokio",
 ]
 
 [[package]]
