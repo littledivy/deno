@@ -710,9 +710,9 @@ pub fn resolve_npm_package_reference_types(
 }
 
 #[op]
-fn op_is_node_file(state: &mut OpState, path: &str) -> bool {
+fn op_is_node_file(state: &mut OpState, path: String) -> bool {
   let state = state.borrow::<State>();
-  match ModuleSpecifier::parse(path) {
+  match ModuleSpecifier::parse(&path) {
     Ok(specifier) => state
       .maybe_npm_resolver
       .as_ref()
@@ -858,7 +858,7 @@ mod tests {
         .replace("://", "_")
         .replace('/', "-");
       let source_path = self.fixtures.join(specifier_text);
-      let response = fs::read_to_string(&source_path)
+      let response = fs::read_to_string(source_path)
         .map(|c| {
           Some(deno_graph::source::LoadResponse::Module {
             specifier: specifier.clone(),
@@ -1222,7 +1222,6 @@ mod tests {
     let actual = test_exec(&specifier)
       .await
       .expect("exec should not have errored");
-    eprintln!("diagnostics {:#?}", actual.diagnostics);
     assert!(actual.diagnostics.is_empty());
     assert!(actual.maybe_tsbuildinfo.is_some());
     assert_eq!(actual.stats.0.len(), 12);
@@ -1234,7 +1233,6 @@ mod tests {
     let actual = test_exec(&specifier)
       .await
       .expect("exec should not have errored");
-    eprintln!("diagnostics {:#?}", actual.diagnostics);
     assert!(actual.diagnostics.is_empty());
     assert!(actual.maybe_tsbuildinfo.is_some());
     assert_eq!(actual.stats.0.len(), 12);
@@ -1246,7 +1244,6 @@ mod tests {
     let actual = test_exec(&specifier)
       .await
       .expect("exec should not have errored");
-    eprintln!("diagnostics {:#?}", actual.diagnostics);
     assert!(actual.diagnostics.is_empty());
   }
 }

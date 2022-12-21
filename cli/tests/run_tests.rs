@@ -2505,7 +2505,7 @@ mod run {
       .unwrap();
     assert!(status.success());
     std::fs::write(&mod1_path, "export { foo } from \"./mod2.ts\";").unwrap();
-    std::fs::write(&mod2_path, "(").unwrap();
+    std::fs::write(mod2_path, "(").unwrap();
     let status = deno_cmd
       .current_dir(util::testdata_path())
       .arg("run")
@@ -2528,7 +2528,7 @@ mod run {
     let mut deno_cmd = util::deno_cmd();
     // With a fresh `DENO_DIR`, run a module with a dependency and a type error.
     std::fs::write(&mod1_path, "import './mod2.ts'; Deno.exit('0');").unwrap();
-    std::fs::write(&mod2_path, "console.log('Hello, world!');").unwrap();
+    std::fs::write(mod2_path, "console.log('Hello, world!');").unwrap();
     let status = deno_cmd
       .current_dir(util::testdata_path())
       .arg("run")
@@ -2780,6 +2780,13 @@ mod run {
     exit_code: 1,
   });
 
+  // Regression test for https://github.com/denoland/deno/issues/16340.
+  itest!(error_with_errors_prop {
+    args: "run --quiet run/error_with_errors_prop.js",
+    output: "run/error_with_errors_prop.js.out",
+    exit_code: 1,
+  });
+
   // Regression test for https://github.com/denoland/deno/issues/12143.
   itest!(js_root_with_ts_check {
     args: "run --quiet --check run/js_root_with_ts_check.js",
@@ -2969,7 +2976,7 @@ mod run {
     assert!(output.status.success());
 
     let prg = util::deno_exe_path();
-    let output = Command::new(&prg)
+    let output = Command::new(prg)
       .env("DENO_DIR", deno_dir.path())
       .env("HTTP_PROXY", "http://nil")
       .env("NO_COLOR", "1")

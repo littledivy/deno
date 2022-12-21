@@ -19,6 +19,7 @@ delete Intl.v8BreakIterator;
     ArrayPrototypeMap,
     DateNow,
     Error,
+    ErrorPrototype,
     FunctionPrototypeCall,
     FunctionPrototypeBind,
     ObjectAssign,
@@ -32,6 +33,7 @@ delete Intl.v8BreakIterator;
     SymbolFor,
     SymbolIterator,
     PromisePrototypeThen,
+    SafeArrayIterator,
     SafeWeakMap,
     TypeError,
     WeakMapPrototypeDelete,
@@ -204,7 +206,7 @@ delete Intl.v8BreakIterator;
     );
     loadedMainWorkerScript = true;
 
-    for (const { url, script } of scripts) {
+    for (const { url, script } of new SafeArrayIterator(scripts)) {
       const err = core.evalContext(script, url)[1];
       if (err !== null) {
         throw err.thrown;
@@ -217,7 +219,7 @@ delete Intl.v8BreakIterator;
   }
 
   function formatException(error) {
-    if (error instanceof Error) {
+    if (ObjectPrototypeIsPrototypeOf(ErrorPrototype, error)) {
       return null;
     } else if (typeof error == "string") {
       return `Uncaught ${
@@ -466,12 +468,14 @@ delete Intl.v8BreakIterator;
     // a snapshot
     ObjectAssign(internals, {
       nodeUnstable: {
-        spawnChild: __bootstrap.spawn.createSpawnChild(
-          ops.op_node_unstable_spawn_child,
-        ),
-        spawn: __bootstrap.spawn.createSpawn(ops.op_node_unstable_spawn_child),
-        spawnSync: __bootstrap.spawn.createSpawnSync(
-          ops.op_node_unstable_spawn_sync,
+        Command: __bootstrap.spawn.createCommand(
+          __bootstrap.spawn.createSpawn(ops.op_node_unstable_spawn_child),
+          __bootstrap.spawn.createSpawnSync(
+            ops.op_node_unstable_spawn_sync,
+          ),
+          __bootstrap.spawn.createSpawnChild(
+            ops.op_node_unstable_spawn_child,
+          ),
         ),
         serve: __bootstrap.flash.createServe(ops.op_node_unstable_flash_serve),
         serve2: __bootstrap.flash.createServe2(
@@ -483,14 +487,6 @@ delete Intl.v8BreakIterator;
           ops.op_node_unstable_net_listen_unixpacket,
         ),
       },
-    });
-
-    ObjectAssign(internals.nodeUnstable, {
-      Command: __bootstrap.spawn.createCommand(
-        internals.nodeUnstable.spawn,
-        internals.nodeUnstable.spawnSync,
-        internals.nodeUnstable.spawnChild,
-      ),
     });
 
     const finalDenoNs = {
@@ -515,22 +511,16 @@ delete Intl.v8BreakIterator;
       // the op function that needs to be passed will be invalidated by creating
       // a snapshot
       ObjectAssign(finalDenoNs, {
-        spawnChild: __bootstrap.spawn.createSpawnChild(ops.op_spawn_child),
-        spawn: __bootstrap.spawn.createSpawn(ops.op_spawn_child),
-        spawnSync: __bootstrap.spawn.createSpawnSync(ops.op_spawn_sync),
+        Command: __bootstrap.spawn.createCommand(
+          __bootstrap.spawn.createSpawn(ops.op_spawn_child),
+          __bootstrap.spawn.createSpawnSync(ops.op_spawn_sync),
+          __bootstrap.spawn.createSpawnChild(ops.op_spawn_child),
+        ),
         serve: __bootstrap.flash.createServe(ops.op_flash_serve),
         serve2: __bootstrap.flash.createServe2(ops.op_flash_serve),
         listenDatagram: __bootstrap.net.createListenDatagram(
           ops.op_net_listen_udp,
           ops.op_net_listen_unixpacket,
-        ),
-      });
-
-      ObjectAssign(finalDenoNs, {
-        Command: __bootstrap.spawn.createCommand(
-          finalDenoNs.spawn,
-          finalDenoNs.spawnSync,
-          finalDenoNs.spawnChild,
         ),
       });
     }
@@ -621,12 +611,14 @@ delete Intl.v8BreakIterator;
     // a snapshot
     ObjectAssign(internals, {
       nodeUnstable: {
-        spawnChild: __bootstrap.spawn.createSpawnChild(
-          ops.op_node_unstable_spawn_child,
-        ),
-        spawn: __bootstrap.spawn.createSpawn(ops.op_node_unstable_spawn_child),
-        spawnSync: __bootstrap.spawn.createSpawnSync(
-          ops.op_node_unstable_spawn_sync,
+        Command: __bootstrap.spawn.createCommand(
+          __bootstrap.spawn.createSpawn(ops.op_node_unstable_spawn_child),
+          __bootstrap.spawn.createSpawnSync(
+            ops.op_node_unstable_spawn_sync,
+          ),
+          __bootstrap.spawn.createSpawnChild(
+            ops.op_node_unstable_spawn_child,
+          ),
         ),
         serve: __bootstrap.flash.createServe(ops.op_node_unstable_flash_serve),
         serve2: __bootstrap.flash.createServe2(
@@ -638,14 +630,6 @@ delete Intl.v8BreakIterator;
           ops.op_node_unstable_net_listen_unixpacket,
         ),
       },
-    });
-
-    ObjectAssign(internals.nodeUnstable, {
-      Command: __bootstrap.spawn.createCommand(
-        internals.nodeUnstable.spawn,
-        internals.nodeUnstable.spawnSync,
-        internals.nodeUnstable.spawnChild,
-      ),
     });
 
     const finalDenoNs = {
@@ -662,21 +646,16 @@ delete Intl.v8BreakIterator;
       // the op function that needs to be passed will be invalidated by creating
       // a snapshot
       ObjectAssign(finalDenoNs, {
-        spawnChild: __bootstrap.spawn.createSpawnChild(ops.op_spawn_child),
-        spawn: __bootstrap.spawn.createSpawn(ops.op_spawn_child),
-        spawnSync: __bootstrap.spawn.createSpawnSync(ops.op_spawn_sync),
+        Command: __bootstrap.spawn.createCommand(
+          __bootstrap.spawn.createSpawn(ops.op_spawn_child),
+          __bootstrap.spawn.createSpawnSync(ops.op_spawn_sync),
+          __bootstrap.spawn.createSpawnChild(ops.op_spawn_child),
+        ),
         serve: __bootstrap.flash.createServe(ops.op_flash_serve),
         serve2: __bootstrap.flash.createServe2(ops.op_flash_serve),
         listenDatagram: __bootstrap.net.createListenDatagram(
           ops.op_net_listen_udp,
           ops.op_net_listen_unixpacket,
-        ),
-      });
-      ObjectAssign(finalDenoNs, {
-        Command: __bootstrap.spawn.createCommand(
-          finalDenoNs.spawn,
-          finalDenoNs.spawnSync,
-          finalDenoNs.spawnChild,
         ),
       });
     }
