@@ -15,6 +15,7 @@ use deno_core::StringOrBuffer;
 use deno_core::ZeroCopyBuf;
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::cell::UnsafeCell;
 use std::future::Future;
 use std::rc::Rc;
 use std::time::SystemTime;
@@ -139,30 +140,37 @@ fn op_flash_start(
       let server_socket = unsafe { &mut *socket.inner.as_ptr() };
 
       tokio::task::spawn(async move {
-        let mut read_buf = vec![0_u8; 1024];
+        let mut read_buf = UnsafeCell::new(vec![0u8; 1024]);
 
-        loop {
+        'outer: loop {
           let mut headers = [httparse::EMPTY_HEADER; 40];
           let mut req = httparse::Request::new(&mut headers);
-          let nread = server_socket.read(&mut read_buf).await;
-          match nread {
-            Ok(0) => {
-              // we need to close the socket here?
-              break;
-            }
-            Ok(n) => {
-              // we need to append incoming bytes to buffer and deal with
-              // slow client sending lots of small packets
-              // we need to know difference between incomplete request
-              // and a bad request
-              let _ = req.parse(&read_buf[..n]);
-              // we can't just call this and forget it - we could
-              // overload downstream. if consumer is proxying or querying
-              // a remote service, it need to be able to apply backpressure
-              js_cb.call(state.add_resource(socket.clone()));
-            }
-            Err(err) => {
-              println!("Error {}", err);
+          let mut offset = 0;
+
+          loop {
+            let nread =
+              server_socket.read(&mut read_buf.get_mut()[offset..]).await;
+            match nread {
+              Ok(0) => break 'outer,
+              Ok(n) => {
+                offset += n;
+
+                let read_buf = unsafe { &mut *read_buf.get() };
+                match req.parse(&read_buf[..offset]) {
+                  Ok(httparse::Status::Complete(o)) => {
+                    js_cb.call(state.add_resource(socket.clone()));
+                    break;
+                  }
+                  Ok(httparse::Status::Partial) => {}
+                  Err(_) => {
+                    // bad request
+                    break 'outer;
+                  }
+                };
+              }
+              Err(err) => {
+                println!("Error {}", err);
+              }
             }
           }
         }
@@ -225,7 +233,7 @@ fn op_flash_try_write_status_str(
   state: &mut OpState,
   rid: u32,
   status: u32,
-  data: &str,
+  data: String,
 ) -> Result<u32, AnyError> {
   let req = state.resource_table.take::<Request>(rid)?;
   let date = state.borrow::<HttpDate>();

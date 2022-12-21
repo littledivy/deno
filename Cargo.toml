@@ -31,7 +31,6 @@ members = [
   "ext/websocket",
   "ext/webstorage",
   "ext/napi",
-  "flash_cli",
 ]
 exclude = ["test_util/std/hash/_wasm"]
 
