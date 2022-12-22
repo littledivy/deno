@@ -1759,15 +1759,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "flash_cli"
-version = "0.1.0"
-dependencies = [
- "deno_core",
- "deno_flash2",
- "tokio",
-]
-
-[[package]]
 name = "flate2"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
