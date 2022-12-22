@@ -95,13 +95,15 @@ fn op_http_start(
 #[op]
 fn op_flash_upgrade_http(
   state: &mut OpState,
-  token: u32,
-  server_id: u32,
+  rid: u32,
 ) -> Result<deno_core::ResourceId, AnyError> {
-  let flash_ctx = state.borrow_mut::<deno_flash::FlashContext>();
-  let ctx = flash_ctx.servers.get_mut(&server_id).unwrap();
+  let resource = state
+    .resource_table
+    .take::<deno_flash2::Request2>(rid)?;
+  let tcp_stream = Rc::try_unwrap(resource.inner.inner.clone())
+    .map_err(|_| bad_resource("TCP stream is currently in use"))?
+    .into_inner();
 
-  let tcp_stream = deno_flash::detach_socket(ctx, token)?;
   Ok(
     state
       .resource_table

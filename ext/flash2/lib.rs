@@ -25,6 +25,8 @@ use tokio::sync::mpsc::{
   unbounded_channel, UnboundedReceiver, UnboundedSender,
 };
 
+mod websocket;
+
 pub struct Unstable(pub bool);
 
 fn check_unstable(state: &OpState, api_name: &str) {
@@ -59,18 +61,25 @@ impl deno_core::Resource for Channel {
     "httpChannel".into()
   }
 }
+
 #[derive(Debug, Clone)]
 struct Request {
-  inner: Rc<RefCell<tokio::net::TcpStream>>,
+  inner: Socket,
 }
+
 impl deno_core::Resource for Request {
   fn name(&self) -> Cow<str> {
     "httpRequest".into()
   }
 }
 
-unsafe impl Send for Request {}
-unsafe impl Sync for Request {}
+#[derive(Debug, Clone)]
+struct Socket {
+  inner: Rc<RefCell<tokio::net::TcpStream>>,
+}
+
+unsafe impl Send for Socket {}
+unsafe impl Sync for Socket {}
 
 #[derive(Clone, Copy)]
 struct JsCb {
@@ -133,7 +142,7 @@ fn op_flash_start(
     let listener = TcpListener::bind("127.0.0.1:4500").await.unwrap();
     loop {
       let (socket, _) = listener.accept().await.unwrap();
-      let socket = Request {
+      let socket = Socket {
         inner: Rc::new(RefCell::new(socket)),
       };
 
@@ -158,7 +167,9 @@ fn op_flash_start(
                 let read_buf = unsafe { &mut *read_buf.get() };
                 match req.parse(&read_buf[..offset]) {
                   Ok(httparse::Status::Complete(o)) => {
-                    js_cb.call(state.add_resource(socket.clone()));
+                    js_cb.call(state.add_resource(Request {
+                      inner: socket.clone(),
+                    }));
                     break;
                   }
                   Ok(httparse::Status::Partial) => {}
@@ -187,20 +198,8 @@ fn op_flash_try_write(
   buffer: &[u8],
 ) -> Result<u32, AnyError> {
   let req = state.resource_table.take::<Request>(rid)?;
-  let sock = req.inner.borrow_mut();
+  let sock = req.inner.inner.borrow_mut();
   Ok(sock.try_write(buffer)? as u32)
-}
-
-#[op]
-fn op_flash_try_write_str(
-  state: &mut OpState,
-  rid: u32,
-  raw: &str,
-) -> Result<u32, AnyError> {
-  let req = state.resource_table.take::<Request>(rid)?;
-  let sock = req.inner.borrow_mut();
-  // can't we use fast api strings here?
-  Ok(sock.try_write(raw.as_bytes())? as u32)
 }
 
 //#[derive(Debug, Clone)]
@@ -237,7 +236,7 @@ fn op_flash_try_write_status_str(
 ) -> Result<u32, AnyError> {
   let req = state.resource_table.take::<Request>(rid)?;
   let date = state.borrow::<HttpDate>();
-  let sock = req.inner.borrow_mut();
+  let sock = req.inner.inner.borrow_mut();
   let response = format!(
     "HTTP/1.1 {} OK\r\nDate: {}\r\ncontent-type: {}\r\nContent-Length: {}\r\n\r\n{}",
     status,
@@ -259,8 +258,10 @@ pub fn init<P: FlashPermissions + 'static>(unstable: bool) -> Extension {
       op_flash_start::decl(),
       op_flash_try_write_status_str::decl(),
       op_flash_try_write::decl(),
-      op_flash_try_write_str::decl(),
       op_flash_start_date_loop::decl(),
+
+      // websocket
+      websocket::op_flash_upgrade_websocket::decl(),
     ])
     .state(move |op_state| {
       op_state.put(Unstable(unstable));
