@@ -6,9 +6,12 @@
   const ops = core.ops;
   const {
     ObjectPrototypeIsPrototypeOf,
+    PromisePrototype,
+    PromisePrototypeCatch,
+    PromisePrototypeThen,
     Uint8ArrayPrototype,
   } = window.__bootstrap.primordials;
-  const { fromFlashRequest, toInnerResponse, _flash } =
+  const { fromFlashRequest, toInnerResponse, _flash, Response } =
     window.__bootstrap.fetch;
 
   const TY_STRING = 1;
@@ -73,17 +76,42 @@
   }
 
   const nop = () => {};
+  let date_timer_running = false;
 
   function createServe() {
-    return async function serve(callback, options) {
+    if (!date_timer_running) {
+      date_timer_running = true;
+      // TODO: make this cancellable
+      ops.op_flash_start_date_loop().catch(err => {
+        date_timer_running = false;
+      })
+    }
+    return async function serve(callback, options = {}) {
+      const onError = options.onError ?? function (err) {
+        // TODO: log the error?
+        return new Response("Internal Server Error", { status: 500 });
+      };
       const argsLen = callback.length;
       await ops.op_flash_start((requestRid) => {
         const request = argsLen ? fromFlashRequest(0, requestRid, null, nop, nop, nop) : undefined;
         const response = callback(request);
+        if (ObjectPrototypeIsPrototypeOf(PromisePrototype, response)) {
+          PromisePrototypeCatch(
+            PromisePrototypeThen(
+              response,
+              res => {
+                sendResponse(requestRid, res)
+              }
+            ),
+            onError,
+          );
+          return;
+        }
         sendResponse(requestRid, response);
       });
     };
   }
+
   function upgradeHttpRaw(req) {}
 
   window.__bootstrap.flash = {

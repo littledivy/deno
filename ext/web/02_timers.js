@@ -244,8 +244,8 @@
     // 1.
     PromisePrototypeThen(
       sleepPromise,
-      (cancelled) => {
-        if (!cancelled) {
+      (active) => {
+        if (!active) {
           // The timer was cancelled.
           removeFromScheduledTimers(timerObject);
           return;
