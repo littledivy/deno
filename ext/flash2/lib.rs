@@ -24,6 +24,10 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc::{
   unbounded_channel, UnboundedReceiver, UnboundedSender,
 };
+use std::net::SocketAddr;
+use std::net::ToSocketAddrs;
+use serde::Deserialize;
+use serde::Serialize;
 
 mod websocket;
 
@@ -49,22 +53,11 @@ pub trait FlashPermissions {
   ) -> Result<(), AnyError>;
 }
 
-struct Channel {
-  inner: Rc<RefCell<UnboundedReceiver<Request>>>,
-}
-
-unsafe impl Send for Channel {}
-unsafe impl Sync for Channel {}
-
-impl deno_core::Resource for Channel {
-  fn name(&self) -> Cow<str> {
-    "httpChannel".into()
-  }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct Request {
   inner: Socket,
+
+  request: httparse::Request<'static, 'static>,
 }
 
 impl deno_core::Resource for Request {
@@ -119,12 +112,73 @@ impl SharedOpState {
   }
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListenOpts {
+  cert: Option<String>,
+  key: Option<String>,
+  hostname: String,
+  port: u16,
+  reuseport: bool,
+}
+
+fn make_addr_port_pair(hostname: &str, port: u16) -> (&str, u16) {
+  // Default to localhost if given just the port. Example: ":80"
+  if hostname.is_empty() {
+    return ("0.0.0.0", port);
+  }
+
+  // If this looks like an ipv6 IP address. Example: "[2001:db8::1]"
+  // Then we remove the brackets.
+  let addr = hostname.trim_start_matches('[').trim_end_matches(']');
+  (addr, port)
+}
+
+/// Resolve network address *synchronously*.
+pub fn resolve_addr_sync(
+  hostname: &str,
+  port: u16,
+) -> Result<impl Iterator<Item = SocketAddr>, AnyError> {
+  let addr_port_pair = make_addr_port_pair(hostname, port);
+  let result = addr_port_pair.to_socket_addrs()?;
+  Ok(result)
+}
+
 #[op(v8)]
 fn op_flash_start(
   scope: &mut v8::HandleScope,
   state: Rc<RefCell<OpState>>,
   js_cb: serde_v8::Value,
+  opts: ListenOpts,
 ) -> Result<impl Future<Output = Result<(), AnyError>>, AnyError> {
+  let ListenOpts { reuseport, hostname, port, .. } = opts;
+
+  let addr = resolve_addr_sync(&hostname, port)?
+    .next()
+    .ok_or_else(|| generic_error("No resolved address found"))?;
+
+  let domain = if addr.is_ipv4() {
+    socket2::Domain::IPV4
+  } else {
+    socket2::Domain::IPV6
+  };
+  let socket = socket2::Socket::new(domain, socket2::Type::STREAM, None)?;
+
+  #[cfg(not(windows))]
+  socket.set_reuse_address(true)?;
+  if reuseport {
+    #[cfg(target_os = "linux")]
+    socket.set_reuse_port(true)?;
+  }
+
+  let socket_addr = socket2::SockAddr::from(addr);
+  socket.bind(&socket_addr)?;
+  socket.listen(128)?;
+  socket.set_nonblocking(true)?;
+
+  let std_listener: std::net::TcpListener = socket.into();
+  let mut listener = TcpListener::from_std(std_listener)?;
+  
   let current_context = scope.get_current_context();
   let context = v8::Global::new(scope, current_context).into_raw();
   let isolate: *mut v8::Isolate = &mut *scope as &mut v8::Isolate;
@@ -135,11 +189,17 @@ fn op_flash_start(
     context: context.as_ptr(),
   };
 
+  // SAFETY: OpState lives as long as the isolate.
   let op_state = { &state.borrow() as &OpState as *const OpState };
   let state = SharedOpState(op_state as *mut OpState);
 
+  // This is a Send-future but won't actually every move to
+  // another thread. This runs on the FuturesUnordered sub executor
+  // in JsRuntime.
+  //
+  // We could use a LocalSet but microbenchmarks show that it is
+  // slower.
   Ok(async move {
-    let listener = TcpListener::bind("127.0.0.1:4500").await.unwrap();
     loop {
       let (socket, _) = listener.accept().await.unwrap();
       let socket = Socket {
@@ -150,7 +210,6 @@ fn op_flash_start(
 
       tokio::task::spawn(async move {
         let mut read_buf = UnsafeCell::new(vec![0u8; 1024]);
-
         'outer: loop {
           let mut headers = [httparse::EMPTY_HEADER; 40];
           let mut req = httparse::Request::new(&mut headers);
@@ -164,11 +223,12 @@ fn op_flash_start(
               Ok(n) => {
                 offset += n;
 
-                let read_buf = unsafe { &mut *read_buf.get() };
-                match req.parse(&read_buf[..offset]) {
+                let buf = unsafe { &mut *read_buf.get() };
+                match req.parse(&buf[..offset]) {
                   Ok(httparse::Status::Complete(o)) => {
                     js_cb.call(state.add_resource(Request {
                       inner: socket.clone(),
+                      request: unsafe { std::mem::transmute(req) },
                     }));
                     break;
                   }
@@ -202,7 +262,37 @@ fn op_flash_try_write(
   Ok(sock.try_write(buffer)? as u32)
 }
 
-//#[derive(Debug, Clone)]
+#[op]
+fn op_flash_get_method(
+  state: &mut OpState,
+  rid: u32,
+) -> Result<String, AnyError> {
+  let req = state.resource_table.get::<Request>(rid)?;
+  Ok(req.request.method.unwrap_or("").to_string())
+}
+
+#[op]
+fn op_flash_get_url(state: &mut OpState, rid: u32) -> Result<String, AnyError> {
+  let req = state.resource_table.get::<Request>(rid)?;
+  Ok(req.request.path.unwrap_or("").to_string())
+}
+
+#[op]
+fn op_flash_get_headers(
+  state: &mut OpState,
+  rid: u32,
+) -> Result<Vec<(ByteString, ByteString)>, AnyError> {
+  let req = state.resource_table.get::<Request>(rid)?;
+
+  let headers = &req.request.headers;
+  Ok(
+    headers
+      .iter()
+      .map(|h| (h.name.as_bytes().into(), h.value.into()))
+      .collect(),
+  )
+}
+
 #[repr(transparent)]
 struct HttpDate {
   current_date: String,
@@ -212,9 +302,9 @@ unsafe impl Send for HttpDate {}
 
 #[op]
 async fn op_flash_start_date_loop(state: Rc<RefCell<OpState>>) {
-  // TODO: cancellation stuff.
+  // TODO: CancelRid for canceling this task.
   loop {
-    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(900)).await;
     {
       let fmtted = httpdate::fmt_http_date(SystemTime::now());
 
@@ -259,7 +349,9 @@ pub fn init<P: FlashPermissions + 'static>(unstable: bool) -> Extension {
       op_flash_try_write_status_str::decl(),
       op_flash_try_write::decl(),
       op_flash_start_date_loop::decl(),
-
+      op_flash_get_method::decl(),
+      op_flash_get_headers::decl(),
+      op_flash_get_url::decl(),
       // websocket
       websocket::op_flash_upgrade_websocket::decl(),
     ])

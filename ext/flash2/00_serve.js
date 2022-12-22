@@ -68,7 +68,7 @@
     }
   }
 
-    function writeResponseBytes(rid, raw) {
+  function writeResponseBytes(rid, raw) {
     const nwritten = ops.op_flash_try_write(rid, raw);
     if (nwritten < raw.byteLength) {
       ops.op_flash_write(rid, raw);
@@ -82,33 +82,69 @@
     if (!date_timer_running) {
       date_timer_running = true;
       // TODO: make this cancellable
-      ops.op_flash_start_date_loop().catch(err => {
+      ops.op_flash_start_date_loop().catch((err) => {
         date_timer_running = false;
-      })
+      });
     }
+
     return async function serve(callback, options = {}) {
+
       const onError = options.onError ?? function (err) {
-        // TODO: log the error?
+        console.error(err);
         return new Response("Internal Server Error", { status: 500 });
       };
+      
+      const onListen = options.onListen ?? function ({ port }) {
+      };
+      
+      const listenOpts = {
+        hostname: options.hostname ?? "127.0.0.1",
+        port: options.port ?? 4500,
+        reuseport: options.reusePort ?? false,
+      };
+
+      if (options.cert || options.key) {
+        if (!options.cert || !options.key) {
+          throw new TypeError(
+            "Both cert and key must be provided to enable HTTPS.",
+          );
+        }
+        listenOpts.cert = options.cert;
+        listenOpts.key = options.key;
+      }
+
       const argsLen = callback.length;
+      
       await ops.op_flash_start((requestRid) => {
-        const request = argsLen ? fromFlashRequest(0, requestRid, null, nop, nop, nop) : undefined;
+        const request = argsLen
+          ? fromFlashRequest(
+            0,
+            requestRid,
+            null,
+            () => ops.op_flash_get_method(requestRid),
+            () => ops.op_flash_get_url(requestRid),
+            () => ops.op_flash_get_headers(requestRid),
+          )
+          : undefined;
         const response = callback(request);
-        if (ObjectPrototypeIsPrototypeOf(PromisePrototype, response)) {
+
+        if (
+          typeof response.then == "function" ||
+          ObjectPrototypeIsPrototypeOf(PromisePrototype, response)
+        ) {
           PromisePrototypeCatch(
             PromisePrototypeThen(
               response,
-              res => {
-                sendResponse(requestRid, res)
-              }
+              (res) => {
+                sendResponse(requestRid, res);
+              },
             ),
             onError,
           );
-          return;
+        } else {
+          sendResponse(requestRid, response);
         }
-        sendResponse(requestRid, response);
-      });
+      }, listenOpts);
     };
   }
 
