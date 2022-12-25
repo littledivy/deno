@@ -13,10 +13,14 @@ use deno_core::Extension;
 use deno_core::OpState;
 use deno_core::StringOrBuffer;
 use deno_core::ZeroCopyBuf;
+use serde::Deserialize;
+use serde::Serialize;
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::cell::UnsafeCell;
 use std::future::Future;
+use std::net::SocketAddr;
+use std::net::ToSocketAddrs;
 use std::rc::Rc;
 use std::time::SystemTime;
 use tokio::io::AsyncReadExt;
@@ -24,11 +28,8 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc::{
   unbounded_channel, UnboundedReceiver, UnboundedSender,
 };
-use std::net::SocketAddr;
-use std::net::ToSocketAddrs;
-use serde::Deserialize;
-use serde::Serialize;
 
+mod event;
 mod websocket;
 
 pub struct Unstable(pub bool);
@@ -73,32 +74,6 @@ struct Socket {
 
 unsafe impl Send for Socket {}
 unsafe impl Sync for Socket {}
-
-#[derive(Clone, Copy)]
-struct JsCb {
-  isolate: *mut v8::Isolate,
-  js_cb: *mut v8::Function,
-  context: *mut v8::Context,
-}
-
-impl JsCb {
-  fn call(&self, rid: u32) {
-    let js_cb = unsafe { &mut *self.js_cb };
-    let isolate = unsafe { &mut *self.isolate };
-    let context = unsafe {
-      std::mem::transmute::<*mut v8::Context, v8::Local<v8::Context>>(
-        self.context,
-      )
-    };
-    let recv = v8::undefined(isolate).into();
-    let scope = &mut v8::HandleScope::with_context(isolate, context);
-    let args = &[v8::Integer::new(scope, rid as i32).into()];
-    let _ = js_cb.call(scope, recv, args);
-  }
-}
-
-unsafe impl Send for JsCb {}
-unsafe impl Sync for JsCb {}
 
 #[derive(Clone, Copy)]
 struct SharedOpState(*mut OpState);
@@ -151,7 +126,12 @@ fn op_flash_start(
   js_cb: serde_v8::Value,
   opts: ListenOpts,
 ) -> Result<impl Future<Output = Result<(), AnyError>>, AnyError> {
-  let ListenOpts { reuseport, hostname, port, .. } = opts;
+  let ListenOpts {
+    reuseport,
+    hostname,
+    port,
+    ..
+  } = opts;
 
   let addr = resolve_addr_sync(&hostname, port)?
     .next()
@@ -178,16 +158,8 @@ fn op_flash_start(
 
   let std_listener: std::net::TcpListener = socket.into();
   let mut listener = TcpListener::from_std(std_listener)?;
-  
-  let current_context = scope.get_current_context();
-  let context = v8::Global::new(scope, current_context).into_raw();
-  let isolate: *mut v8::Isolate = &mut *scope as &mut v8::Isolate;
-  let js_cb = JsCb {
-    isolate,
-    js_cb: v8::Global::new(scope, js_cb.v8_value).into_raw().as_ptr()
-      as *mut v8::Function,
-    context: context.as_ptr(),
-  };
+
+  let js_cb = event::JsCb::new(scope, js_cb);
 
   // SAFETY: OpState lives as long as the isolate.
   let op_state = { &state.borrow() as &OpState as *const OpState };
@@ -216,8 +188,14 @@ fn op_flash_start(
           let mut offset = 0;
 
           loop {
+            let buf = unsafe { &mut read_buf.get_mut() };
+            if offset >= buf.len() {
+              // Grow the buffer if we need to.
+              buf.resize(offset * 2, 0);
+            }
+
             let nread =
-              server_socket.read(&mut read_buf.get_mut()[offset..]).await;
+              server_socket.read(&mut buf[offset..]).await;
             match nread {
               Ok(0) => break 'outer,
               Ok(n) => {
@@ -226,10 +204,12 @@ fn op_flash_start(
                 let buf = unsafe { &mut *read_buf.get() };
                 match req.parse(&buf[..offset]) {
                   Ok(httparse::Status::Complete(o)) => {
-                    js_cb.call(state.add_resource(Request {
-                      inner: socket.clone(),
-                      request: unsafe { std::mem::transmute(req) },
-                    }));
+                    unsafe {
+                      js_cb.call(state.add_resource(Request {
+                        inner: socket.clone(),
+                        request: unsafe { std::mem::transmute(req) },
+                      }))
+                    };
                     break;
                   }
                   Ok(httparse::Status::Partial) => {}
@@ -298,13 +278,11 @@ struct HttpDate {
   current_date: String,
 }
 
-unsafe impl Send for HttpDate {}
-
 #[op]
 async fn op_flash_start_date_loop(state: Rc<RefCell<OpState>>) {
   // TODO: CancelRid for canceling this task.
   loop {
-    tokio::time::sleep(tokio::time::Duration::from_millis(900)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
     {
       let fmtted = httpdate::fmt_http_date(SystemTime::now());
 
