@@ -273,6 +273,8 @@ fn op_flash_get_headers(
   )
 }
 
+struct DateLoopCancelHandle(Rc<CancelHandle>);
+
 #[repr(transparent)]
 struct HttpDate {
   current_date: String,
@@ -280,19 +282,40 @@ struct HttpDate {
 
 #[op]
 async fn op_flash_start_date_loop(state: Rc<RefCell<OpState>>) {
-  // TODO: CancelRid for canceling this task.
+  // TODO(bartlomieju): it seems we only have one cancel handle - this should
+  // be handled for multiple servers running.
+  let cancel_handle = {
+    let s = state.borrow();
+    let cancel_handle = s.borrow::<DateLoopCancelHandle>();
+    cancel_handle.0.clone()
+  };
+
   loop {
-    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+    let r = tokio::time::sleep(tokio::time::Duration::from_millis(1000))
+      .or_cancel(&cancel_handle)
+      .await;
     {
       let fmtted = httpdate::fmt_http_date(SystemTime::now());
 
       let mut state = state.borrow_mut();
-      let mut date = state.borrow_mut::<HttpDate>();
+      let date = state.borrow_mut::<HttpDate>();
       *date = HttpDate {
         current_date: fmtted,
       };
     }
+
+    if r.is_err() {
+      break;
+    }
   }
+}
+
+#[op]
+fn op_flash_stop_date_loop(state: &mut OpState) {
+  // TODO(bartlomieju): it seems we only have one cancel handle - this should
+  // be handled for multiple servers running.
+  let cancel_handle = state.borrow::<DateLoopCancelHandle>();
+  cancel_handle.0.cancel();
 }
 
 #[op]
@@ -327,6 +350,7 @@ pub fn init<P: FlashPermissions + 'static>(unstable: bool) -> Extension {
       op_flash_try_write_status_str::decl(),
       op_flash_try_write::decl(),
       op_flash_start_date_loop::decl(),
+      op_flash_stop_date_loop::decl(),
       op_flash_get_method::decl(),
       op_flash_get_headers::decl(),
       op_flash_get_url::decl(),
@@ -338,6 +362,7 @@ pub fn init<P: FlashPermissions + 'static>(unstable: bool) -> Extension {
       op_state.put(HttpDate {
         current_date: httpdate::fmt_http_date(SystemTime::now()),
       });
+      op_state.put(DateLoopCancelHandle(CancelHandle::new_rc()));
       Ok(())
     })
     .build()

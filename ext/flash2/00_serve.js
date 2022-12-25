@@ -81,22 +81,20 @@
   function createServe() {
     if (!date_timer_running) {
       date_timer_running = true;
-      // TODO: make this cancellable
       ops.op_flash_start_date_loop().catch((err) => {
         date_timer_running = false;
       });
     }
 
     return async function serve(callback, options = {}) {
-
       const onError = options.onError ?? function (err) {
         console.error(err);
         return new Response("Internal Server Error", { status: 500 });
       };
-      
+
       const onListen = options.onListen ?? function ({ port }) {
       };
-      
+
       const listenOpts = {
         hostname: options.hostname ?? "127.0.0.1",
         port: options.port ?? 4500,
@@ -113,8 +111,18 @@
         listenOpts.key = options.key;
       }
 
+      const signal = options.signal;
+      signal?.addEventListener("abort", () => {
+        ops.op_flash_stop_date_loop();
+        date_timer_running = false;
+        // TODO:
+        // PromisePrototypeThen(server.close(), () => {}, () => {});
+      }, {
+        once: true,
+      });
+
       const argsLen = callback.length;
-      
+
       await ops.op_flash_start((requestRid) => {
         const request = argsLen
           ? fromFlashRequest(
