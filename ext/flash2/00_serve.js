@@ -134,6 +134,7 @@
             () => ops.op_flash_get_headers(requestRid),
           )
           : undefined;
+
         const response = callback(request);
 
         if (

@@ -28,3 +28,4 @@ rustls-pemfile.workspace = true
 serde.workspace = true
 socket2.workspace = true
 tokio.workspace = true
+paste = "1.0.11"

@@ -1,6 +1,9 @@
 use crate::Socket;
 use deno_core::error::type_error;
 use deno_core::error::AnyError;
+use deno_core::ByteString;
+use deno_core::op;
+use deno_core::OpState;
 use std::borrow::Cow;
 use std::rc::Rc;
 use tokio::net::TcpStream;
@@ -35,5 +38,49 @@ impl Request {
   pub fn try_write(self: Rc<Self>, buf: &[u8]) -> Result<usize, AnyError> {
     let mut inner = self.inner.inner.borrow_mut();
     inner.try_write(buf).map_err(|err| err.into())
+  }
+}
+
+macro_rules! mk_getter_op {
+  ($self: ident, fn $name:ident () -> $ty:ty {
+    $($body:tt)*
+  }) => {
+    paste::item! {
+     #[op]
+      pub fn [<op_flash_get_ $name>] (
+        state: &mut OpState,
+        rid: u32,
+      ) -> Result<$ty, AnyError> {
+        let $self = state.resource_table.get::<Request>(rid)?;
+        Ok({
+          $($body)*
+        })
+      }
+    }
+  };
+}
+
+mk_getter_op! {
+  this,
+  fn method() -> String {
+    this.request.method.unwrap_or("").to_string()
+  }
+}
+
+mk_getter_op! {
+  this,
+  fn url() -> String {
+    this.request.path.unwrap_or("").to_string()
+  }
+}
+
+mk_getter_op! {
+  this,
+  fn headers() -> Vec<(ByteString, ByteString)> {
+    let headers = &this.request.headers;
+    headers
+      .iter()
+      .map(|h| (h.name.as_bytes().into(), h.value.into()))
+      .collect()
   }
 }

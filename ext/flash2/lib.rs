@@ -236,21 +236,6 @@ fn op_flash_try_write(
 }
 
 #[op]
-fn op_flash_get_method(
-  state: &mut OpState,
-  rid: u32,
-) -> Result<String, AnyError> {
-  let req = state.resource_table.get::<Request>(rid)?;
-  Ok(req.request.method.unwrap_or("").to_string())
-}
-
-#[op]
-fn op_flash_get_url(state: &mut OpState, rid: u32) -> Result<String, AnyError> {
-  let req = state.resource_table.get::<Request>(rid)?;
-  Ok(req.request.path.unwrap_or("").to_string())
-}
-
-#[op]
 fn op_flash_get_headers(
   state: &mut OpState,
   rid: u32,
@@ -298,9 +283,9 @@ pub fn init<P: FlashPermissions + 'static>(unstable: bool) -> Extension {
       op_flash_try_write::decl(),
       date::op_flash_start_date_loop::decl(),
       date::op_flash_stop_date_loop::decl(),
-      op_flash_get_method::decl(),
-      op_flash_get_headers::decl(),
-      op_flash_get_url::decl(),
+      request::op_flash_get_method::decl(),
+      request::op_flash_get_headers::decl(),
+      request::op_flash_get_url::decl(),
       // websocket
       websocket::op_flash_upgrade_websocket::decl(),
     ])
