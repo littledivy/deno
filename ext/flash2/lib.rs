@@ -29,8 +29,14 @@ use tokio::sync::mpsc::{
   unbounded_channel, UnboundedReceiver, UnboundedSender,
 };
 
+mod date;
 mod event;
+mod request;
 mod websocket;
+
+use date::DateLoopCancelHandle;
+use date::HttpDate;
+use request::Request;
 
 pub struct Unstable(pub bool);
 
@@ -54,22 +60,9 @@ pub trait FlashPermissions {
   ) -> Result<(), AnyError>;
 }
 
-#[derive(Debug)]
-struct Request {
-  inner: Socket,
-
-  request: httparse::Request<'static, 'static>,
-}
-
-impl deno_core::Resource for Request {
-  fn name(&self) -> Cow<str> {
-    "httpRequest".into()
-  }
-}
-
 #[derive(Debug, Clone)]
-struct Socket {
-  inner: Rc<RefCell<tokio::net::TcpStream>>,
+pub struct Socket {
+  pub inner: Rc<RefCell<tokio::net::TcpStream>>,
 }
 
 unsafe impl Send for Socket {}
@@ -194,8 +187,7 @@ fn op_flash_start(
               buf.resize(offset * 2, 0);
             }
 
-            let nread =
-              server_socket.read(&mut buf[offset..]).await;
+            let nread = server_socket.read(&mut buf[offset..]).await;
             match nread {
               Ok(0) => break 'outer,
               Ok(n) => {
@@ -205,10 +197,12 @@ fn op_flash_start(
                 match req.parse(&buf[..offset]) {
                   Ok(httparse::Status::Complete(o)) => {
                     unsafe {
-                      js_cb.call(state.add_resource(Request {
-                        inner: socket.clone(),
-                        request: unsafe { std::mem::transmute(req) },
-                      }))
+                      js_cb.call(
+                        state
+                          .add_resource(Request::new(socket.clone(), unsafe {
+                            std::mem::transmute(req)
+                          })),
+                      )
                     };
                     break;
                   }
@@ -237,9 +231,8 @@ fn op_flash_try_write(
   rid: u32,
   buffer: &[u8],
 ) -> Result<u32, AnyError> {
-  let req = state.resource_table.take::<Request>(rid)?;
-  let sock = req.inner.inner.borrow_mut();
-  Ok(sock.try_write(buffer)? as u32)
+  let request = state.resource_table.get::<Request>(rid)?;
+  Ok(request.try_write(buffer)? as u32)
 }
 
 #[op]
@@ -273,51 +266,6 @@ fn op_flash_get_headers(
   )
 }
 
-struct DateLoopCancelHandle(Rc<CancelHandle>);
-
-#[repr(transparent)]
-struct HttpDate {
-  current_date: String,
-}
-
-#[op]
-async fn op_flash_start_date_loop(state: Rc<RefCell<OpState>>) {
-  // TODO(bartlomieju): it seems we only have one cancel handle - this should
-  // be handled for multiple servers running.
-  let cancel_handle = {
-    let s = state.borrow();
-    let cancel_handle = s.borrow::<DateLoopCancelHandle>();
-    cancel_handle.0.clone()
-  };
-
-  loop {
-    let r = tokio::time::sleep(tokio::time::Duration::from_millis(1000))
-      .or_cancel(&cancel_handle)
-      .await;
-    {
-      let fmtted = httpdate::fmt_http_date(SystemTime::now());
-
-      let mut state = state.borrow_mut();
-      let date = state.borrow_mut::<HttpDate>();
-      *date = HttpDate {
-        current_date: fmtted,
-      };
-    }
-
-    if r.is_err() {
-      break;
-    }
-  }
-}
-
-#[op]
-fn op_flash_stop_date_loop(state: &mut OpState) {
-  // TODO(bartlomieju): it seems we only have one cancel handle - this should
-  // be handled for multiple servers running.
-  let cancel_handle = state.borrow::<DateLoopCancelHandle>();
-  cancel_handle.0.cancel();
-}
-
 #[op]
 fn op_flash_try_write_status_str(
   state: &mut OpState,
@@ -327,7 +275,6 @@ fn op_flash_try_write_status_str(
 ) -> Result<u32, AnyError> {
   let req = state.resource_table.take::<Request>(rid)?;
   let date = state.borrow::<HttpDate>();
-  let sock = req.inner.inner.borrow_mut();
   let response = format!(
     "HTTP/1.1 {} OK\r\nDate: {}\r\ncontent-type: {}\r\nContent-Length: {}\r\n\r\n{}",
     status,
@@ -336,7 +283,7 @@ fn op_flash_try_write_status_str(
     data.len(),
     data
   );
-  Ok(sock.try_write(response.as_bytes())? as u32)
+  Ok(req.try_write(response.as_bytes())? as u32)
 }
 
 pub fn init<P: FlashPermissions + 'static>(unstable: bool) -> Extension {
@@ -349,8 +296,8 @@ pub fn init<P: FlashPermissions + 'static>(unstable: bool) -> Extension {
       op_flash_start::decl(),
       op_flash_try_write_status_str::decl(),
       op_flash_try_write::decl(),
-      op_flash_start_date_loop::decl(),
-      op_flash_stop_date_loop::decl(),
+      date::op_flash_start_date_loop::decl(),
+      date::op_flash_stop_date_loop::decl(),
       op_flash_get_method::decl(),
       op_flash_get_headers::decl(),
       op_flash_get_url::decl(),
@@ -359,9 +306,7 @@ pub fn init<P: FlashPermissions + 'static>(unstable: bool) -> Extension {
     ])
     .state(move |op_state| {
       op_state.put(Unstable(unstable));
-      op_state.put(HttpDate {
-        current_date: httpdate::fmt_http_date(SystemTime::now()),
-      });
+      op_state.put(HttpDate::now());
       op_state.put(DateLoopCancelHandle(CancelHandle::new_rc()));
       Ok(())
     })

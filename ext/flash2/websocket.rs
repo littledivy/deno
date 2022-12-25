@@ -52,10 +52,8 @@ pub async fn op_flash_upgrade_websocket(
   state: Rc<RefCell<OpState>>,
   rid: u32,
 ) -> Result<ResourceId, AnyError> {
-  let stream = state.borrow_mut().resource_table.take::<Request>(rid)?;
-  let stream = Rc::try_unwrap(stream.inner.inner.clone())
-    .unwrap()
-    .into_inner();
+  let resource = state.borrow_mut().resource_table.take::<Request>(rid)?;
+  let stream = resource.try_inner()?;
   deno_websocket::ws_create_server_stream(
     &state,
     Box::pin(UpgradedStream(stream)),
