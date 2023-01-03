@@ -113,12 +113,21 @@ pub fn resolve_addr_sync(
 }
 
 #[op(v8)]
-fn op_flash_start(
+fn op_flash_start<P>(
   scope: &mut v8::HandleScope,
   state: Rc<RefCell<OpState>>,
   js_cb: serde_v8::Value,
   opts: ListenOpts,
-) -> Result<impl Future<Output = Result<(), AnyError>>, AnyError> {
+) -> Result<impl Future<Output = Result<(), AnyError>>, AnyError>
+where
+  P: FlashPermissions + 'static,
+{
+  {
+    let mut s = state.borrow_mut();
+    s.borrow_mut::<P>()
+      .check_net(&(&opts.hostname, Some(opts.port)), "Deno.serve()")?;
+  }
+
   let ListenOpts {
     reuseport,
     hostname,
@@ -278,7 +287,7 @@ pub fn init<P: FlashPermissions + 'static>(unstable: bool) -> Extension {
       "00_serve.js",
     ))
     .ops(vec![
-      op_flash_start::decl(),
+      op_flash_start::decl::<P>(),
       op_flash_try_write_status_str::decl(),
       op_flash_try_write::decl(),
       date::op_flash_start_date_loop::decl(),
