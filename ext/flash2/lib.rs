@@ -175,6 +175,9 @@ where
   // slower.
   Ok(async move {
     loop {
+      // TODO(bartlomieju): add cancel handle here to close the server;
+      // though it's unclear what we should do to already spawned tasks... should
+      // they be allowed to finish for X seconds and then terminated abruptly?
       let (socket, _) = listener.accept().await.unwrap();
       let socket = Socket {
         inner: Rc::new(RefCell::new(socket)),
