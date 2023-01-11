@@ -76,16 +76,25 @@
   }
 
   const nop = () => {};
-  let date_timer_running = false;
+  let dateTimerRunning = false;
 
-  function createServe() {
-    if (!date_timer_running) {
-      date_timer_running = true;
+  function startDateLoop() {
+    if (!dateTimerRunning) {
+      dateTimerRunning = true;
       ops.op_flash_start_date_loop().catch((err) => {
-        date_timer_running = false;
+        dateTimerRunning = false;
       });
     }
+  }
 
+  function stopDateLoop() {
+    if (dateTimerRunning) {
+      ops.op_flash_stop_date_loop();
+      dateTimerRunning = false;
+    }
+  }
+
+  function createServe() {
     return async function serve(callback, options = {}) {
       const onError = options.onError ?? function (err) {
         console.error(err);
@@ -112,9 +121,9 @@
       }
 
       const signal = options.signal;
+      // TODO(bartlomieju): move to after `const server = ...`
       signal?.addEventListener("abort", () => {
-        ops.op_flash_stop_date_loop();
-        date_timer_running = false;
+        stopDateLoop();
         // TODO:
         // PromisePrototypeThen(server.close(), () => {}, () => {});
       }, {
@@ -122,6 +131,20 @@
       });
 
       const argsLen = callback.length;
+
+      const server = {
+        transport: listenOpts.cert && listenOpts.key ? "https" : "http",
+        hostname: listenOpts.hostname,
+        port: listenOpts.port,
+        closed: false,
+        // finished: finishedPromise,
+        async close() {
+          if (server.closed) {
+            return;
+          }
+          server.closed = true;
+        },
+      };
 
       await ops.op_flash_start((requestRid) => {
         const request = argsLen
