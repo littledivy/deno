@@ -9,6 +9,7 @@ members = [
   "core",
   "ops",
   "runtime",
+  "flash_dev",
   "serde_v8",
   "test_ffi",
   "test_napi",

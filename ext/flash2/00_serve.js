@@ -128,7 +128,9 @@
           ? fromFlashRequest(
             0,
             requestRid,
-            null,
+            ops.op_flash_get_has_body(requestRid)
+              ? createRequestBodyStream(requestRid)
+              : null,
             () => ops.op_flash_get_method(requestRid),
             () => ops.op_flash_get_url(requestRid),
             () => ops.op_flash_get_headers(requestRid),
@@ -155,6 +157,42 @@
         }
       }, listenOpts);
     };
+  }
+
+  function createRequestBodyStream(requestId) {
+    // The first packet is left over bytes after parsing the request
+    const firstRead = ops.op_flash_first_packet(requestId);
+    if (!firstRead) return null;
+    let firstEnqueued = firstRead.byteLength == 0;
+
+    return new ReadableStream({
+      type: "bytes",
+      async pull(controller) {
+        try {
+          if (firstEnqueued === false) {
+            controller.enqueue(firstRead);
+            firstEnqueued = true;
+            return;
+          }
+          // This is the largest possible size for a single packet on a TLS
+          // stream.
+          const chunk = new Uint8Array(16 * 1024 + 256);
+          const read = await ops.op_flash_read_body(requestId, chunk);
+          if (read > 0) {
+            // We read some data. Enqueue it onto the stream.
+            controller.enqueue(TypedArrayPrototypeSubarray(chunk, 0, read));
+          } else {
+            // We have reached the end of the body, so we close the stream.
+            controller.close();
+          }
+        } catch (err) {
+          // There was an error while reading a chunk of the body, so we
+          // error.
+          controller.error(err);
+          controller.close();
+        }
+      },
+    });
   }
 
   function upgradeHttpRaw(req) {}

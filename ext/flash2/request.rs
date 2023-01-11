@@ -1,8 +1,9 @@
 use crate::Socket;
+use async_http_codec::BodyDecode;
 use deno_core::error::type_error;
 use deno_core::error::AnyError;
-use deno_core::ByteString;
 use deno_core::op;
+use deno_core::ByteString;
 use deno_core::OpState;
 use std::borrow::Cow;
 use std::rc::Rc;
@@ -82,5 +83,12 @@ mk_getter_op! {
       .iter()
       .map(|h| (h.name.as_bytes().into(), h.value.into()))
       .collect()
+  }
+}
+
+mk_getter_op! {
+  this,
+  fn has_body() -> bool {
+    this.request.method.map(|m| m != "GET" && m != "HEAD").unwrap_or(false)
   }
 }

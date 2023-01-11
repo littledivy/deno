@@ -10,8 +10,6 @@ use std::task::Poll;
 
 use crate::Request;
 
-// Wrapper type for tokio::net::TcpStream that implements
-// deno_websocket::UpgradedStream
 struct UpgradedStream(tokio::net::TcpStream);
 impl tokio::io::AsyncRead for UpgradedStream {
   fn poll_read(

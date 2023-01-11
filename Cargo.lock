@@ -159,6 +159,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-http-codec"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c04b0e825ad4abf544facbabc3f6e771afaa134a1e33674aa00eb00c7f64bbc"
+dependencies = [
+ "anyhow",
+ "futures",
+ "http",
+ "httparse",
+ "log",
+]
+
+[[package]]
 name = "async-stream"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1061,14 +1074,17 @@ dependencies = [
 name = "deno_flash2"
 version = "0.15.0"
 dependencies = [
+ "async-http-codec",
  "deno_core",
  "deno_tls",
  "deno_websocket",
+ "derive_more",
  "http",
  "httparse",
  "httpdate",
  "libc",
  "log",
+ "paste",
  "rustls",
  "rustls-pemfile",
  "serde",
@@ -1756,6 +1772,20 @@ dependencies = [
  "proc-macro2 1.0.47",
  "quote 1.0.21",
  "syn 1.0.105",
+]
+
+[[package]]
+name = "flash_dev"
+version = "0.1.0"
+dependencies = [
+ "deno_core",
+ "deno_fetch",
+ "deno_flash2",
+ "deno_url",
+ "deno_web",
+ "deno_webidl",
+ "futures",
+ "tokio",
 ]
 
 [[package]]
@@ -3113,6 +3143,12 @@ dependencies = [
  "smallvec",
  "windows-sys",
 ]
+
+[[package]]
+name = "paste"
+version = "1.0.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d01a5bd0424d00070b0098dd17ebca6f961a959dead1dbcbbbc1d1cd8d3deeba"
 
 [[package]]
 name = "path-clean"

@@ -32,6 +32,7 @@ use tokio::sync::mpsc::{
 mod date;
 mod event;
 mod request;
+mod socket;
 mod websocket;
 
 use date::DateLoopCancelHandle;
@@ -236,22 +237,6 @@ fn op_flash_try_write(
 }
 
 #[op]
-fn op_flash_get_headers(
-  state: &mut OpState,
-  rid: u32,
-) -> Result<Vec<(ByteString, ByteString)>, AnyError> {
-  let req = state.resource_table.get::<Request>(rid)?;
-
-  let headers = &req.request.headers;
-  Ok(
-    headers
-      .iter()
-      .map(|h| (h.name.as_bytes().into(), h.value.into()))
-      .collect(),
-  )
-}
-
-#[op]
 fn op_flash_try_write_status_str(
   state: &mut OpState,
   rid: u32,
@@ -286,6 +271,7 @@ pub fn init<P: FlashPermissions + 'static>(unstable: bool) -> Extension {
       request::op_flash_get_method::decl(),
       request::op_flash_get_headers::decl(),
       request::op_flash_get_url::decl(),
+      request::op_flash_get_has_body::decl(),
       // websocket
       websocket::op_flash_upgrade_websocket::decl(),
     ])
