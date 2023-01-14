@@ -1,0 +1,23 @@
+[package]
+name = "flash_dev"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+deno_core.workspace = true
+deno_flash2 .workspace = true
+deno_webidl.workspace = true
+deno_web .workspace = true
+deno_url.workspace = true
+deno_fetch .workspace = true
+
+tokio = { version = "1.17.0", features = ["full"] }
+futures = "0.3.21"
+
+[build-dependencies]
+deno_core.workspace = true
+deno_flash2 .workspace = true
+deno_webidl.workspace = true
+deno_web .workspace = true
+deno_url.workspace = true
+deno_fetch .workspace = true
