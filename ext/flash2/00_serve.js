@@ -146,7 +146,7 @@
         },
       };
 
-      await ops.op_flash_start((requestRid) => {
+      const serverId = ops.op_flash_start((requestRid) => {
         const request = argsLen
           ? fromFlashRequest(
             0,
@@ -179,6 +179,8 @@
           sendResponse(requestRid, response);
         }
       }, listenOpts);
+
+      await ops.op_flash_drive(serverId);
     };
   }
 

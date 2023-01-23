@@ -57,6 +57,7 @@ fn main() {
     extensions_with_js: vec![
       deno_webidl::init(),
       deno_url::init(),
+      deno_console::init(),
       deno_web::init::<Permissions>(Default::default(), None),
       deno_fetch::init::<Permissions>(Default::default()),
       deno_flash2::init::<Permissions>(true),
@@ -65,6 +66,11 @@ fn main() {
     ..Default::default()
   });
 
+  {
+    let state_rc = js_runtime.op_state();
+    let mut state = state_rc.borrow_mut();
+    state.put(Permissions);
+  }
   let runtime = tokio::runtime::Builder::new_current_thread()
     .enable_all()
     .build()

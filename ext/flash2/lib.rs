@@ -11,6 +11,7 @@ use deno_core::CancelFuture;
 use deno_core::CancelHandle;
 use deno_core::Extension;
 use deno_core::OpState;
+use deno_core::ResourceId;
 use deno_core::StringOrBuffer;
 use deno_core::ZeroCopyBuf;
 use serde::Deserialize;
@@ -79,6 +80,11 @@ impl SharedOpState {
     let state = unsafe { &mut *self.0 };
     state.resource_table.add(r)
   }
+
+  fn add_server(&self, server: FlashServer) -> u32 {
+    let state = unsafe { &mut *self.0 };
+    state.resource_table.add(server)
+  }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -119,7 +125,7 @@ fn op_flash_start<P>(
   state: Rc<RefCell<OpState>>,
   js_cb: serde_v8::Value,
   opts: ListenOpts,
-) -> Result<impl Future<Output = Result<(), AnyError>>, AnyError>
+) -> Result<ResourceId, AnyError>
 where
   P: FlashPermissions + 'static,
 {
@@ -174,7 +180,7 @@ where
   //
   // We could use a LocalSet but microbenchmarks show that it is
   // slower.
-  Ok(async move {
+  let spawn_handle = tokio::task::spawn(async move {
     loop {
       // TODO(bartlomieju): add cancel handle here to close the server;
       // though it's unclear what we should do to already spawned tasks... should
@@ -234,8 +240,41 @@ where
         }
       });
     }
+
     Ok(())
-  })
+  });
+
+  let rid = state.add_server(FlashServer {
+    join_handle: spawn_handle,
+  });
+
+  Ok(rid)
+}
+
+#[op]
+pub async fn op_flash_drive(
+  state: Rc<RefCell<OpState>>,
+  rid: u32,
+) -> Result<(), AnyError> {
+  let join_handle = {
+    let mut state = state.borrow_mut();
+    let flash_server = state.resource_table.take::<FlashServer>(rid)?;
+    Rc::try_unwrap(flash_server).unwrap().join_handle
+  };
+  join_handle.await??;
+  Ok(())
+}
+
+#[derive(Debug)]
+struct FlashServer {
+  join_handle: tokio::task::JoinHandle<Result<(), AnyError>>,
+}
+
+impl deno_core::Resource for FlashServer {
+  fn name(&self) -> Cow<str> {
+    // TODO(bartlomieju): change the name to `httpServer`?
+    "flashServer".into()
+  }
 }
 
 #[op]
@@ -276,6 +315,7 @@ pub fn init<P: FlashPermissions + 'static>(unstable: bool) -> Extension {
     ))
     .ops(vec![
       op_flash_start::decl::<P>(),
+      op_flash_drive::decl(),
       op_flash_try_write_status_str::decl(),
       op_flash_try_write::decl(),
       date::op_flash_start_date_loop::decl(),
