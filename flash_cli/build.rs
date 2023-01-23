@@ -57,6 +57,7 @@ fn main() {
     extensions: vec![
       deno_webidl::init(),
       deno_url::init(),
+      deno_console::init(),
       deno_web::init::<Permissions>(Default::default(), None),
       deno_fetch::init::<Permissions>(Default::default()),
       deno_flash2::init::<Permissions>(true),

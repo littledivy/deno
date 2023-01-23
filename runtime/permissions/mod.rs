@@ -1727,12 +1727,13 @@ impl deno_flash::FlashPermissions for PermissionsContainer {
 }
 
 impl deno_flash2::FlashPermissions for PermissionsContainer {
+  #[inline(always)]
   fn check_net<T: AsRef<str>>(
     &mut self,
     host: &(T, Option<u16>),
     api_name: &str,
   ) -> Result<(), AnyError> {
-    self.net.check(host, Some(api_name))
+    self.0.lock().net.check(host, Some(api_name))
   }
 }
 

@@ -99,16 +99,18 @@ fn op_flash_upgrade_http(
   state: &mut OpState,
   rid: u32,
 ) -> Result<deno_core::ResourceId, AnyError> {
-  let resource = state.resource_table.take::<deno_flash2::Request2>(rid)?;
-  let tcp_stream = Rc::try_unwrap(resource.inner.inner.clone())
-    .map_err(|_| bad_resource("TCP stream is currently in use"))?
-    .into_inner();
+  let resource = state.resource_table.take::<deno_flash2::Request>(rid)?;
+  // let tcp_stream = Rc::try_unwrap(resource.inner.clone())
+  //   .map_err(|_| bad_resource("TCP stream is currently in use"))?
+  //   .into_inner();
+  // let tcp_stream = resource.inner.clone();
 
-  Ok(
-    state
-      .resource_table
-      .add(TcpStreamResource::new(tcp_stream.into_split())),
-  )
+  todo!()
+  // Ok(
+  //   state
+  //     .resource_table
+  //     .add(TcpStreamResource::new(tcp_stream.into_split())),
+  // )
 }
 
 #[derive(Serialize)]

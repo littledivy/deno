@@ -11,7 +11,7 @@ use tokio::net::TcpStream;
 
 #[derive(Debug)]
 pub struct Request {
-  inner: Socket,
+  pub inner: Socket,
 
   pub request: httparse::Request<'static, 'static>,
 }

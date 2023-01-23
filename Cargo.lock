@@ -1794,6 +1794,7 @@ dependencies = [
 name = "flash_dev"
 version = "0.1.0"
 dependencies = [
+ "deno_console",
  "deno_core",
  "deno_fetch",
  "deno_flash2",

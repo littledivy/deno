@@ -25,9 +25,9 @@ use std::rc::Rc;
 use std::time::SystemTime;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
-use tokio::sync::mpsc::{
-  unbounded_channel, UnboundedReceiver, UnboundedSender,
-};
+use tokio::sync::mpsc::unbounded_channel;
+use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::UnboundedSender;
 
 mod date;
 mod event;
@@ -37,7 +37,7 @@ mod websocket;
 
 use date::DateLoopCancelHandle;
 use date::HttpDate;
-use request::Request;
+pub use request::Request;
 
 pub struct Unstable(pub bool);
 
@@ -269,7 +269,7 @@ fn op_flash_try_write_status_str(
 }
 
 pub fn init<P: FlashPermissions + 'static>(unstable: bool) -> Extension {
-  Extension::builder()
+  Extension::builder("flash2")
     .js(deno_core::include_js_files!(
       prefix "deno:ext/flash",
       "00_serve.js",
