@@ -121,30 +121,8 @@
       }
 
       const signal = options.signal;
-      // TODO(bartlomieju): move to after `const server = ...`
-      signal?.addEventListener("abort", () => {
-        stopDateLoop();
-        // TODO:
-        // PromisePrototypeThen(server.close(), () => {}, () => {});
-      }, {
-        once: true,
-      });
 
       const argsLen = callback.length;
-
-      const server = {
-        transport: listenOpts.cert && listenOpts.key ? "https" : "http",
-        hostname: listenOpts.hostname,
-        port: listenOpts.port,
-        closed: false,
-        // finished: finishedPromise,
-        async close() {
-          if (server.closed) {
-            return;
-          }
-          server.closed = true;
-        },
-      };
 
       const serverId = ops.op_flash_start((requestRid) => {
         const request = argsLen
@@ -180,7 +158,36 @@
         }
       }, listenOpts);
 
-      await ops.op_flash_drive(serverId);
+      const serverPromise = ops.op_flash_drive(serverId);
+      const finishedPromise = PromisePrototypeCatch(serverPromise, () => {});
+
+      const server = {
+        transport: listenOpts.cert && listenOpts.key ? "https" : "http",
+        hostname: listenOpts.hostname,
+        port: listenOpts.port,
+        closed: false,
+        finished: finishedPromise,
+        async close() {
+          if (server.closed) {
+            return;
+          }
+          server.closed = true;
+          await ops.op_flash_close(serverId);
+          await server.finished;
+        },
+      };
+      signal?.addEventListener("abort", () => {
+        stopDateLoop();
+        PromisePrototypeThen(server.close(), () => {}, () => {});
+      }, {
+        once: true,
+      });
+
+      try {
+        await serverPromise;
+      } catch (err) {
+        console.error(err);
+      }
     };
   }
 

@@ -1,5 +1,6 @@
 // Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
 
+use deno_core::error::bad_resource;
 use deno_core::error::generic_error;
 use deno_core::error::type_error;
 use deno_core::error::AnyError;
@@ -9,6 +10,7 @@ use deno_core::v8;
 use deno_core::ByteString;
 use deno_core::CancelFuture;
 use deno_core::CancelHandle;
+use deno_core::CancelTryFuture;
 use deno_core::Extension;
 use deno_core::OpState;
 use deno_core::ResourceId;
@@ -119,6 +121,15 @@ pub fn resolve_addr_sync(
   Ok(result)
 }
 
+fn accept_err(e: std::io::Error) -> AnyError {
+  // FIXME(bartlomieju): compatibility with current JS implementation
+  if let std::io::ErrorKind::Interrupted = e.kind() {
+    bad_resource("Listener has been closed")
+  } else {
+    e.into()
+  }
+}
+
 #[op(v8)]
 fn op_flash_start<P>(
   scope: &mut v8::HandleScope,
@@ -180,18 +191,24 @@ where
   //
   // We could use a LocalSet but microbenchmarks show that it is
   // slower.
-  let spawn_handle = tokio::task::spawn(async move {
+  let cancel_handle = Rc::new(CancelHandle::default());
+  let cancel_handle_ = cancel_handle.clone();
+  let spawn_handle = tokio::task::spawn_local(async move {
     loop {
-      // TODO(bartlomieju): add cancel handle here to close the server;
-      // though it's unclear what we should do to already spawned tasks... should
-      // they be allowed to finish for X seconds and then terminated abruptly?
-      let (socket, _) = listener.accept().await.unwrap();
+      let (socket, _) = listener
+        .accept()
+        .try_or_cancel(cancel_handle_.clone())
+        .await
+        .map_err(accept_err)?;
       let socket = Socket {
         inner: Rc::new(RefCell::new(socket)),
       };
 
       let server_socket = unsafe { &mut *socket.inner.as_ptr() };
 
+      // TODO(bartlomieju): add cancel handle here to close the server;
+      // though it's unclear what we should do to already spawned tasks... should
+      // they be allowed to finish for X seconds and then terminated abruptly?
       tokio::task::spawn(async move {
         let mut read_buf = UnsafeCell::new(vec![0u8; 1024]);
         'outer: loop {
@@ -245,7 +262,8 @@ where
   });
 
   let rid = state.add_server(FlashServer {
-    join_handle: spawn_handle,
+    join_handle: RefCell::new(Some(spawn_handle)),
+    cancel_handle,
   });
 
   Ok(rid)
@@ -257,9 +275,11 @@ pub async fn op_flash_drive(
   rid: u32,
 ) -> Result<(), AnyError> {
   let join_handle = {
-    let mut state = state.borrow_mut();
-    let flash_server = state.resource_table.take::<FlashServer>(rid)?;
-    Rc::try_unwrap(flash_server).unwrap().join_handle
+    let state = state.borrow();
+    let flash_server = state.resource_table.get::<FlashServer>(rid)?;
+    let mut rc = flash_server.join_handle.borrow_mut();
+    let handle = rc.take().unwrap();
+    handle
   };
   join_handle.await??;
   Ok(())
@@ -267,13 +287,21 @@ pub async fn op_flash_drive(
 
 #[derive(Debug)]
 struct FlashServer {
-  join_handle: tokio::task::JoinHandle<Result<(), AnyError>>,
+  join_handle: RefCell<Option<tokio::task::JoinHandle<Result<(), AnyError>>>>,
+  cancel_handle: Rc<CancelHandle>,
 }
 
 impl deno_core::Resource for FlashServer {
   fn name(&self) -> Cow<str> {
     // TODO(bartlomieju): change the name to `httpServer`?
     "flashServer".into()
+  }
+}
+
+#[op]
+fn op_flash_close(state: &mut OpState, rid: u32) {
+  if let Ok(server) = state.resource_table.get::<FlashServer>(rid) {
+    server.cancel_handle.cancel()
   }
 }
 
