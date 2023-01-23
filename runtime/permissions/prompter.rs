@@ -192,6 +192,11 @@ impl PermissionPrompter for TtyPrompter {
       return PromptResponse::Deny; // don't grant permission if this fails
     }
 
+    // Lock stdio streams, so no other output is written while the prompt is
+    // displayed.
+    let _stdout_guard = std::io::stdout().lock();
+    let _stderr_guard = std::io::stderr().lock();
+
     // print to stderr so that if stdout is piped this is still displayed.
     const OPTS: &str = "[y/n] (y = yes, allow; n = no, deny)";
     eprint!("{}  ┌ ", PERMISSION_EMOJI);
@@ -201,11 +206,8 @@ impl PermissionPrompter for TtyPrompter {
     if let Some(api_name) = api_name {
       eprintln!("   ├ Requested by `{}` API", api_name);
     }
-    let msg = format!(
-      "   ├ Run again with --allow-{} to bypass this prompt.",
-      name
-    );
-    eprintln!("{}", colors::italic(&msg));
+    let msg = format!("Run again with --allow-{} to bypass this prompt.", name);
+    eprintln!("   ├ {}", colors::italic(&msg));
     eprint!("   └ {}", colors::bold("Allow?"));
     eprint!(" {} > ", OPTS);
     let value = loop {
@@ -240,6 +242,9 @@ impl PermissionPrompter for TtyPrompter {
         }
       };
     };
+
+    drop(_stdout_guard);
+    drop(_stderr_guard);
 
     value
   }

@@ -1,18 +1,20 @@
 // Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
 
-use crate::runtime::GetErrorClassFn;
-use crate::runtime::JsRealm;
-use crate::runtime::JsRuntime;
-use crate::source_map::apply_source_map;
-use crate::source_map::get_source_line;
-use crate::url::Url;
-use anyhow::Error;
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::fmt::Formatter;
+
+use anyhow::Error;
+
+use crate::runtime::GetErrorClassFn;
+use crate::runtime::JsRealm;
+use crate::runtime::JsRuntime;
+use crate::source_map::apply_source_map;
+use crate::source_map::get_source_line;
+use crate::url::Url;
 
 /// A generic wrapper that can encapsulate any concrete error type.
 // TODO(ry) Deprecate AnyError and encourage deno_core::anyhow::Error instead.
@@ -310,10 +312,10 @@ impl JsError {
     let msg = v8::Exception::create_message(scope, exception);
 
     let mut exception_message = None;
-    let state_rc = JsRuntime::state(scope);
+    let context_state_rc = JsRealm::state_from_scope(scope);
 
     let js_format_exception_cb =
-      state_rc.borrow().js_format_exception_cb.clone();
+      context_state_rc.borrow().js_format_exception_cb.clone();
     if let Some(format_exception_cb) = js_format_exception_cb {
       let format_exception_cb = format_exception_cb.open(scope);
       let this = v8::undefined(scope).into();
@@ -379,6 +381,7 @@ impl JsError {
       let mut source_line = None;
       let mut source_line_frame_index = None;
       {
+        let state_rc = JsRuntime::state(scope);
         let state = &mut *state_rc.borrow_mut();
 
         // When the stack frame array is empty, but the source location given by
