@@ -344,6 +344,7 @@ pub fn init<P: FlashPermissions + 'static>(unstable: bool) -> Extension {
     .ops(vec![
       op_flash_start::decl::<P>(),
       op_flash_drive::decl(),
+      op_flash_close::decl(),
       op_flash_try_write_status_str::decl(),
       op_flash_try_write::decl(),
       date::op_flash_start_date_loop::decl(),

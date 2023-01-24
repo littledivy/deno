@@ -476,9 +476,9 @@ delete Intl.v8BreakIterator;
           ),
         ),
         serve: __bootstrap.flash.createServe(ops.op_node_unstable_flash_serve),
-        serve2: __bootstrap.flash.createServe2(
-          ops.op_node_unstable_flash_serve,
-        ),
+        // serve2: __bootstrap.flash.createServe2(
+        //   ops.op_node_unstable_flash_serve,
+        // ),
         upgradeHttpRaw: __bootstrap.flash.upgradeHttpRaw,
         listenDatagram: __bootstrap.net.createListenDatagram(
           ops.op_node_unstable_net_listen_udp,
@@ -516,7 +516,7 @@ delete Intl.v8BreakIterator;
           __bootstrap.spawn.createSpawnChild(ops.op_spawn_child),
         ),
         serve: __bootstrap.flash.createServe(ops.op_flash_serve),
-        serve2: __bootstrap.flash.createServe2(ops.op_flash_serve),
+        // serve2: __bootstrap.flash.createServe2(ops.op_flash_serve),
         listenDatagram: __bootstrap.net.createListenDatagram(
           ops.op_net_listen_udp,
           ops.op_net_listen_unixpacket,
@@ -620,9 +620,9 @@ delete Intl.v8BreakIterator;
           ),
         ),
         serve: __bootstrap.flash.createServe(ops.op_node_unstable_flash_serve),
-        serve2: __bootstrap.flash.createServe2(
-          ops.op_node_unstable_flash_serve,
-        ),
+        // serve2: __bootstrap.flash.createServe2(
+        //   ops.op_node_unstable_flash_serve,
+        // ),
         upgradeHttpRaw: __bootstrap.flash.upgradeHttpRaw,
         listenDatagram: __bootstrap.net.createListenDatagram(
           ops.op_node_unstable_net_listen_udp,
@@ -652,7 +652,7 @@ delete Intl.v8BreakIterator;
           __bootstrap.spawn.createSpawnChild(ops.op_spawn_child),
         ),
         serve: __bootstrap.flash.createServe(ops.op_flash_serve),
-        serve2: __bootstrap.flash.createServe2(ops.op_flash_serve),
+        // serve2: __bootstrap.flash.createServe2(ops.op_flash_serve),
         listenDatagram: __bootstrap.net.createListenDatagram(
           ops.op_net_listen_udp,
           ops.op_net_listen_unixpacket,

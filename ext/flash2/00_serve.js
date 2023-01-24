@@ -172,7 +172,7 @@
             return;
           }
           server.closed = true;
-          await ops.op_flash_close(serverId);
+          ops.op_flash_close(serverId);
           await server.finished;
         },
       };
