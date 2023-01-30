@@ -28,7 +28,7 @@ mod specifier;
 
 use graph::Graph;
 pub use snapshot::NpmResolutionSnapshot;
-pub use specifier::resolve_npm_package_reqs;
+pub use specifier::resolve_graph_npm_info;
 pub use specifier::NpmPackageReference;
 pub use specifier::NpmPackageReq;
 
@@ -112,7 +112,7 @@ impl NpmPackageId {
       let (input, version) = parse_version(input)?;
       match NpmVersion::parse(version) {
         Ok(version) => Ok((input, (name.to_string(), version))),
-        Err(err) => ParseError::fail(at_version_input, format!("{:#}", err)),
+        Err(err) => ParseError::fail(at_version_input, format!("{err:#}")),
       }
     }
 
@@ -173,7 +173,7 @@ impl NpmPackageId {
     }
 
     with_failure_handling(parse_id_at_level(0))(id)
-      .with_context(|| format!("Invalid npm package id '{}'.", id))
+      .with_context(|| format!("Invalid npm package id '{id}'."))
   }
 
   pub fn display(&self) -> String {
