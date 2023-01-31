@@ -136,7 +136,7 @@ fn op_flash_start<P>(
   state: Rc<RefCell<OpState>>,
   js_cb: serde_v8::Value,
   opts: ListenOpts,
-) -> Result<ResourceId, AnyError>
+) -> Result<(ResourceId, u16), AnyError>
 where
   P: FlashPermissions + 'static,
 {
@@ -177,8 +177,8 @@ where
   socket.set_nonblocking(true)?;
 
   let std_listener: std::net::TcpListener = socket.into();
-  let mut listener = TcpListener::from_std(std_listener)?;
-
+  let listener = TcpListener::from_std(std_listener)?;
+  let used_port = listener.local_addr().unwrap().port();
   let js_cb = event::JsCb::new(scope, js_cb);
 
   // SAFETY: OpState lives as long as the isolate.
@@ -266,7 +266,7 @@ where
     cancel_handle,
   });
 
-  Ok(rid)
+  Ok((rid, used_port))
 }
 
 #[op]

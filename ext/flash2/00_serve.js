@@ -17,6 +17,13 @@
   const TY_STRING = 1;
   const TY_BUFFER = 2;
 
+  function hostnameForDisplay(hostname) {
+    // If the hostname is "0.0.0.0", we display "localhost" in console
+    // because browsers in Windows don't resolve "0.0.0.0".
+    // See the discussion in https://github.com/denoland/deno_std/issues/1165
+    return hostname === "0.0.0.0" ? "localhost" : hostname;
+  }
+
   // Get the type of response body.
   function responseType(innerResponse) {
     if (innerResponse.body !== null) {
@@ -94,14 +101,50 @@
     }
   }
 
+  function argsToOptions(arg1, arg2) {
+    let options = undefined;
+    let handler = undefined;
+    if (typeof arg1 === "function") {
+      handler = arg1;
+      options = arg2;
+    } else if (typeof arg2 === "function") {
+      handler = arg2;
+      options = arg1;
+    } else {
+      options = arg1;
+    }
+    if (handler === undefined) {
+      if (options === undefined) {
+        throw new TypeError(
+          "No handler was provided, so an options bag is mandatory.",
+        );
+      }
+      handler = options.handler;
+    }
+    if (typeof handler !== "function") {
+      throw new TypeError("A handler function must be provided.");
+    }
+    if (options === undefined) {
+      options = {};
+    }
+
+    return { options, handler };
+  }
+
   function createServe() {
-    return async function serve(callback, options = {}) {
+    return async function serve(arg1, arg2) {
+      const { options, handler } = argsToOptions(arg1, arg2);
       const onError = options.onError ?? function (err) {
         console.error(err);
         return new Response("Internal Server Error", { status: 500 });
       };
 
       const onListen = options.onListen ?? function ({ port }) {
+        console.log(
+          `Listening on http://${
+            hostnameForDisplay(listenOpts.hostname)
+          }:${port}/`,
+        );
       };
 
       const listenOpts = {
@@ -122,9 +165,9 @@
 
       const signal = options.signal;
 
-      const argsLen = callback.length;
+      const argsLen = handler.length;
 
-      const serverId = ops.op_flash_start((requestRid) => {
+      const [serverId, port] = ops.op_flash_start((requestRid) => {
         const request = argsLen
           ? fromFlashRequest(
             0,
@@ -138,7 +181,7 @@
           )
           : undefined;
 
-        const response = callback(request);
+        const response = handler(request);
 
         if (
           typeof response.then == "function" ||
@@ -158,6 +201,14 @@
         }
       }, listenOpts);
 
+      signal?.addEventListener("abort", () => {
+        stopDateLoop();
+        PromisePrototypeThen(server.close(), () => {}, () => {});
+      }, {
+        once: true,
+      });
+
+      onListen({ hostname: listenOpts.hostname, port });
       const serverPromise = ops.op_flash_drive(serverId);
       const finishedPromise = PromisePrototypeCatch(serverPromise, () => {});
 
@@ -176,12 +227,6 @@
           await server.finished;
         },
       };
-      signal?.addEventListener("abort", () => {
-        stopDateLoop();
-        PromisePrototypeThen(server.close(), () => {}, () => {});
-      }, {
-        once: true,
-      });
 
       try {
         await serverPromise;
