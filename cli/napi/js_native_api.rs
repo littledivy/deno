@@ -2071,14 +2071,18 @@ fn napi_is_arraybuffer(
 
 #[napi_sym::napi_sym]
 fn napi_is_buffer(
-  _env: *mut Env,
+  env: *mut Env,
   value: napi_value,
   result: *mut bool,
 ) -> Result {
+  check_env!(env);
+  check_arg_option!(env, value);
+  check_arg!(env, result);
+
   let value = napi_value_unchecked(value);
-  // TODO: should we assume Buffer as Uint8Array in Deno?
-  // or use std/node polyfill?
-  *result = value.is_typed_array();
+  // https://github.com/nodejs/node/blob/dc90810f9ffe4b3d8f3f6bf8608a0cd73b9b4c8f/src/node_buffer.cc#L236
+  *result = value.is_array_buffer_view();
+  napi_clear_last_error(env);
   Ok(())
 }
 
