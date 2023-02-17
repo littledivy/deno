@@ -108,6 +108,7 @@ where
     ))
     .ops(vec![
       op_fetch::decl::<FP>(),
+      op_fetch_simple::decl(),
       op_fetch_send::decl(),
       op_fetch_custom_client::decl::<FP>(),
     ])
@@ -184,12 +185,38 @@ pub trait FetchPermissions {
 pub fn get_declaration() -> PathBuf {
   PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("lib.deno_fetch.d.ts")
 }
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FetchReturn {
   request_rid: ResourceId,
   request_body_rid: Option<ResourceId>,
   cancel_handle_rid: Option<ResourceId>,
+}
+
+#[op]
+pub fn op_fetch_simple(
+  state: &mut OpState,
+  url: String,
+) -> Result<u32, AnyError> {
+  let client = state.borrow::<reqwest::Client>();
+  let url = Url::parse(&url)?;
+
+  let request = client.request(Method::GET, url);
+  let cancel_handle = deno_core::CancelHandle::new_rc();
+  let fut = async move {
+    request
+      .send()
+      .or_cancel(cancel_handle)
+      .await
+      .map(|res| res.map_err(|err| type_error(err.to_string())))
+  };
+
+  Ok(
+    state
+      .resource_table
+      .add(FetchRequestResource(Box::pin(fut))),
+  )
 }
 
 #[op]

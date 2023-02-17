@@ -101,12 +101,12 @@ function createResponseBodyStream(responseBodyRid, terminator) {
   const readable = readableStreamForRid(responseBodyRid);
 
   function onAbort() {
-    errorReadableStream(readable, terminator.reason);
+    if(terminator) errorReadableStream(readable, terminator.reason);
     core.tryClose(responseBodyRid);
   }
 
   // TODO(lucacasonato): clean up registration
-  terminator[abortSignal.add](onAbort);
+  if(terminator) terminator[abortSignal.add](onAbort);
 
   return readable;
 }
@@ -404,10 +404,49 @@ function httpRedirectFetch(request, response, terminator) {
 }
 
 /**
+ * @param {string} url
+ */
+async function simpleFetch(input) {
+  const requestRid = ops.op_fetch_simple(input);
+
+  const resp = await opFetchSend(requestRid);
+
+  /** @type {InnerResponse} */
+  const response = {
+    headerList: resp.headers,
+    status: resp.status,
+    body: null,
+    statusMessage: resp.statusText,
+    type: "basic",
+    url() {
+      if (this.urlList.length == 0) return null;
+      return this.urlList[this.urlList.length - 1];
+    },
+    urlList: [],
+  };
+
+  // TODO: redirect handling?
+
+  if (nullBodyStatus(response.status)) {
+    core.close(resp.responseRid);
+  } else {
+    response.body = new InnerBody(
+      createResponseBodyStream(resp.responseRid),
+    );
+  }
+
+  return response;
+}
+
+/**
  * @param {RequestInfo} input
  * @param {RequestInit} init
  */
-function fetch(input, init = {}) {
+function fetch(input, init = undefined) {
+  if (init === undefined && typeof input == "string") {
+    return simpleFetch(input);
+  }
+
   // There is an async dispatch later that causes a stack trace disconnect.
   // We reconnect it by assigning the result of that dispatch to `opPromise`,
   // awaiting `opPromise` in an inner function also named `fetch()` and
