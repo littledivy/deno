@@ -195,28 +195,35 @@ pub struct FetchReturn {
 }
 
 #[op]
-pub fn op_fetch_simple(
-  state: &mut OpState,
+pub async fn op_fetch_simple(
+  state: Rc<RefCell<OpState>>,
   url: String,
 ) -> Result<u32, AnyError> {
-  let client = state.borrow::<reqwest::Client>();
+  let client = state.borrow().borrow::<reqwest::Client>().clone();
   let url = Url::parse(&url)?;
 
   let request = client.request(Method::GET, url);
-  let cancel_handle = deno_core::CancelHandle::new_rc();
-  let fut = async move {
-    request
-      .send()
-      .or_cancel(cancel_handle)
-      .await
-      .map(|res| res.map_err(|err| type_error(err.to_string())))
-  };
+  let res = request
+    .send()
+    .await
+    .map_err(|err| type_error(err.to_string()))?;
 
-  Ok(
-    state
-      .resource_table
-      .add(FetchRequestResource(Box::pin(fut))),
-  )
+  let content_length = res.content_length();
+
+  let stream: BytesStream = Box::pin(res.bytes_stream().map(|r| {
+    r.map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))
+  }));
+
+  let rid = state
+    .borrow_mut()
+    .resource_table
+    .add(FetchResponseBodyResource {
+      reader: AsyncRefCell::new(stream.peekable()),
+      cancel: CancelHandle::default(),
+      size: content_length,
+    });
+
+  Ok(rid)
 }
 
 #[op]

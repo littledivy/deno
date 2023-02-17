@@ -407,16 +407,14 @@ function httpRedirectFetch(request, response, terminator) {
  * @param {string} url
  */
 async function simpleFetch(input) {
-  const requestRid = ops.op_fetch_simple(input);
-
-  const resp = await opFetchSend(requestRid);
+  const responseRid = await core.opAsync("op_fetch_simple", input);
 
   /** @type {InnerResponse} */
   const response = {
-    headerList: resp.headers,
-    status: resp.status,
+    headerList: [], // resp.headers,
+    status: 200, // resp.status,
     body: null,
-    statusMessage: resp.statusText,
+    statusMessage: "OK", // resp.statusText,
     type: "basic",
     url() {
       if (this.urlList.length == 0) return null;
@@ -431,7 +429,7 @@ async function simpleFetch(input) {
     core.close(resp.responseRid);
   } else {
     response.body = new InnerBody(
-      createResponseBodyStream(resp.responseRid),
+      createResponseBodyStream(responseRid),
     );
   }
 
