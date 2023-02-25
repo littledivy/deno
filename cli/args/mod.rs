@@ -43,7 +43,7 @@ use deno_runtime::colors;
 use deno_runtime::deno_node::PackageJson;
 use deno_runtime::deno_tls::rustls;
 use deno_runtime::deno_tls::rustls::RootCertStore;
-use deno_runtime::deno_tls::rustls_native_certs::load_native_certs;
+// use deno_runtime::deno_tls::rustls_native_certs::load_native_certs;
 use deno_runtime::deno_tls::rustls_pemfile;
 use deno_runtime::deno_tls::webpki_roots;
 use deno_runtime::inspector_server::InspectorServer;
@@ -439,12 +439,12 @@ pub fn get_root_cert_store(
         );
       }
       "system" => {
-        let roots = load_native_certs().expect("could not load platform certs");
-        for root in roots {
-          root_cert_store
-            .add(&rustls::Certificate(root.0))
-            .expect("Failed to add platform cert to root cert store");
-        }
+        // let roots = load_native_certs().expect("could not load platform certs");
+        // for root in roots {
+        //   root_cert_store
+        //     .add(&rustls::Certificate(root.0))
+        //     .expect("Failed to add platform cert to root cert store");
+        // }
       }
       _ => {
         return Err(anyhow!("Unknown certificate store \"{}\" specified (allowed: \"system,mozilla\")", store));
