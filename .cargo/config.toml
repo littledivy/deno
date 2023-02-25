@@ -11,7 +11,7 @@ rustflags = [
 ]
 
 [target.aarch64-apple-darwin]
-rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+rustflags = ["-C", "link-arg=-fuse-ld=lld", "-C", "link-args=-weak_framework Metal"]
 
 [target.'cfg(all())']
 rustflags = [
