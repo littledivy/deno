@@ -105,6 +105,7 @@ pub use crate::resources::AsyncResult;
 pub use crate::resources::Resource;
 pub use crate::resources::ResourceId;
 pub use crate::resources::ResourceTable;
+pub use crate::runtime::CodeCache;
 pub use crate::runtime::CompiledWasmModuleStore;
 pub use crate::runtime::CrossIsolateStore;
 pub use crate::runtime::GetErrorClassFn;

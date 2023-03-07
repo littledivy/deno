@@ -151,6 +151,11 @@ pub type SharedArrayBufferStore =
 
 pub type CompiledWasmModuleStore = CrossIsolateStore<v8::CompiledWasmModule>;
 
+pub trait CodeCache {
+  fn get_code_cache(&self) -> Option<Vec<u8>>;
+  fn set_code_cache(&mut self, data: &[u8]);
+}
+
 #[derive(Default)]
 pub(crate) struct ContextState {
   js_recv_cb: Option<v8::Global<v8::Function>>,
@@ -1067,6 +1072,18 @@ impl JsRuntime {
     self
       .global_realm()
       .execute_script(self.v8_isolate(), name, source_code)
+  }
+
+  pub fn execute_script_cached(
+    &mut self,
+    name: &str,
+    source_code: &str,
+    options: serde_json::Value,
+    code_cache: &mut dyn CodeCache,
+  ) -> Result<(), Error> {
+    self
+      .global_realm()
+      .execute_script_cached(self.v8_isolate(), name, source_code, options, code_cache)
   }
 
   /// Takes a snapshot. The isolate should have been created with will_snapshot
@@ -2678,6 +2695,65 @@ impl JsRealm {
       Some(value) => {
         let value_handle = v8::Global::new(tc_scope, value);
         Ok(value_handle)
+      }
+      None => {
+        assert!(tc_scope.has_caught());
+        let exception = tc_scope.exception().unwrap();
+        exception_to_err_result(tc_scope, exception, false)
+      }
+    }
+  }
+
+  pub fn execute_script_cached(
+    &self,
+    isolate: &mut v8::Isolate,
+    name: &str,
+    source_code: &str,
+    options: serde_json::Value,
+    code_cache: &mut dyn CodeCache,
+  ) -> Result<(), Error> {
+    let scope = &mut self.handle_scope(isolate);
+
+    let source = v8::String::new(scope, source_code).unwrap();
+    let name = v8::String::new(scope, name).unwrap();
+    let origin = bindings::script_origin(scope, name);
+
+    let tc_scope = &mut v8::TryCatch::new(scope);
+    let arg = v8::String::new(tc_scope, "arg").unwrap();    
+    let script = match code_cache.get_code_cache() {
+      Some(cached_data) => {
+        let script = v8::script_compiler::Source::new_with_cached_data(
+          source,
+          Some(&origin),
+          v8::script_compiler::CachedData::new(&cached_data)
+        );
+        v8::script_compiler::compile_function(tc_scope, script, &[arg], &[], v8::script_compiler::CompileOptions::ConsumeCodeCache, v8::script_compiler::NoCacheReason::NoReason)
+      }
+      None => {
+        let script = v8::script_compiler::Source::new(
+          source,
+          Some(&origin),
+        );
+        v8::script_compiler::compile_function(tc_scope, script, &[arg], &[], v8::script_compiler::CompileOptions::EagerCompile, v8::script_compiler::NoCacheReason::NoReason)
+      }
+    };
+
+    let script = match script {
+      Some(script) => script,
+      None => {
+        let exception = tc_scope.exception().unwrap();
+        return exception_to_err_result(tc_scope, exception, false);
+      }
+    };
+    let arg = serde_v8::to_v8(tc_scope, options).unwrap();
+    let recv = v8::undefined(tc_scope);
+    match script.call(tc_scope, recv.into(), &[arg]) {
+      Some(_) => {
+        let cached_data = script.create_code_cache();
+        if let Some(cached_data) = cached_data {
+          code_cache.set_code_cache(&cached_data);
+        }
+        Ok(())
       }
       None => {
         assert!(tc_scope.has_caught());

@@ -348,15 +348,47 @@ impl MainWorker {
   }
 
   pub fn bootstrap(&mut self, options: &BootstrapOptions) {
-    let scope = &mut self.js_runtime.handle_scope();
-    let options_v8 =
-      deno_core::serde_v8::to_v8(scope, options.as_json()).unwrap();
-    let bootstrap_fn = self.bootstrap_fn_global.take().unwrap();
-    let bootstrap_fn = v8::Local::new(scope, bootstrap_fn);
-    let undefined = v8::undefined(scope);
-    bootstrap_fn
-      .call(scope, undefined.into(), &[options_v8])
-      .unwrap();
+    struct BootstrapCodeCache;
+    impl deno_core::CodeCache for BootstrapCodeCache {
+      fn get_code_cache(&self) -> Option<Vec<u8>> {
+        // Check if the code cache is available in cwd
+        use std::fs;
+        use std::path::Path;
+        let code_cache_path = Path::new("deno_bootstrap_code_cache.bin");
+        if code_cache_path.exists() {
+          let code_cache =
+            fs::read(code_cache_path).expect("Failed to read code cache");
+          Some(code_cache)
+        } else {
+          None
+        }
+      }
+      fn set_code_cache(&mut self, code_cache: &[u8]) {
+        // Write code cache to cwd
+        use std::fs;
+        use std::path::Path;
+        let code_cache_path = Path::new("deno_bootstrap_code_cache.bin");
+        fs::write(code_cache_path, code_cache)
+          .expect("Failed to write code cache");
+      }
+    }
+    let bootstrap_fn_source = {
+      let bootstrap_fn_global = self.bootstrap_fn_global.take().unwrap();
+      let scope = &mut self.js_runtime.handle_scope();
+      let bootstrap_fn = v8::Local::new(scope, bootstrap_fn_global);
+      bootstrap_fn.to_rust_string_lossy(scope)
+    };
+    println!("{}", &bootstrap_fn_source);
+    
+    self
+      .js_runtime
+      .execute_script_cached(
+        &deno_core::located_script_name!(),
+        &bootstrap_fn_source,
+        options.as_json(),
+        &mut BootstrapCodeCache,
+      )
+      .expect("Failed to execute bootstrap script");
   }
 
   /// See [JsRuntime::execute_script](deno_core::JsRuntime::execute_script)
