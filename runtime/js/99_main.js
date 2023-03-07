@@ -441,7 +441,6 @@ function bootstrapMainRuntime(runtimeOptions) {
   performance.setTimeOrigin(DateNow());
   globalThis_ = globalThis;
 
-  const consoleFromV8 = globalThis.Deno.core.console;
 
   // Remove bootstrapping data from the global scope
   delete globalThis.__bootstrap;
@@ -463,8 +462,9 @@ function bootstrapMainRuntime(runtimeOptions) {
   if (runtimeOptions.unstableFlag) {
     ObjectDefineProperties(globalThis, unstableWindowOrWorkerGlobalScope);
   }
-  
+
   if (runtimeOptions.inspectFlag) {
+    const consoleFromV8 = globalThis.Deno.core.console;
     const consoleFromDeno = globalThis.console;
     wrapConsole(consoleFromDeno, consoleFromV8);
   }
