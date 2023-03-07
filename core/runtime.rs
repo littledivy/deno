@@ -212,12 +212,13 @@ fn v8_init(
     " --no-validate-asm",
     " --turbo_fast_api_calls",
     " --harmony-change-array-by-copy",
+    " --no-verify-snapshot-checksum"
   );
 
   if predictable {
     v8::V8::set_flags_from_string(&format!(
       "{}{}",
-      flags, " --predictable --random-seed=42"
+      flags, " --predictable --random-seed=42 --no-verify-snapshot-checksum"
     ));
   } else {
     v8::V8::set_flags_from_string(flags);
