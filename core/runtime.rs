@@ -519,8 +519,11 @@ impl JsRuntime {
           isolate_ptr.read()
         };
         let scope = &mut v8::HandleScope::new(&mut isolate);
-        let context =
-          bindings::initialize_context(scope, &op_ctxs, snapshot_options);
+        let context = if snapshot_options.loaded() {
+          v8::Context::new(scope)
+        } else {
+          bindings::initialize_context(scope, &op_ctxs, snapshot_options)
+        };
 
         // Get module map data from the snapshot
         if has_startup_snapshot {
@@ -568,8 +571,11 @@ impl JsRuntime {
           isolate_ptr.read()
         };
         let scope = &mut v8::HandleScope::new(&mut isolate);
-        let context =
-          bindings::initialize_context(scope, &op_ctxs, snapshot_options);
+        let context = if snapshot_options.loaded() {
+          v8::Context::new(scope)
+        } else {
+          bindings::initialize_context(scope, &op_ctxs, snapshot_options)
+        };
 
         // Get module map data from the snapshot
         if has_startup_snapshot {
@@ -1074,17 +1080,17 @@ impl JsRuntime {
   ///
   /// `Error` can usually be downcast to `JsError`.
   pub fn snapshot(mut self) -> v8::StartupData {
-    // Nuke Deno.core.ops.* to avoid ExternalReference snapshotting issues
-    // TODO(@AaronO): make ops stable across snapshots
-    {
-      let scope = &mut self.handle_scope();
-      let o = Self::eval::<v8::Object>(scope, "Deno.core.ops").unwrap();
-      let names = o.get_own_property_names(scope, Default::default()).unwrap();
-      for i in 0..names.length() {
-        let key = names.get_index(scope, i).unwrap();
-        o.delete(scope, key);
-      }
-    }
+    // // Nuke Deno.core.ops.* to avoid ExternalReference snapshotting issues
+    // // TODO(@AaronO): make ops stable across snapshots
+    // {
+    //   let scope = &mut self.handle_scope();
+    //   let o = Self::eval::<v8::Object>(scope, "Deno.core.ops").unwrap();
+    //   let names = o.get_own_property_names(scope, Default::default()).unwrap();
+    //   for i in 0..names.length() {
+    //     let key = names.get_index(scope, i).unwrap();
+    //     o.delete(scope, key);
+    //   }
+    // }
 
     self.state.borrow_mut().inspector.take();
 
@@ -2519,6 +2525,10 @@ impl JsRuntime {
         let is_done = js_macrotask_cb.call(tc_scope, this, &[]);
 
         if let Some(exception) = tc_scope.exception() {
+          println!(
+            "Uncaught exception in macrotask callback: {}",
+            exception.to_rust_string_lossy(tc_scope)
+          );
           return exception_to_err_result(tc_scope, exception, false);
         }
 
