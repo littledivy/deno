@@ -13,6 +13,12 @@ use deno_runtime::deno_cache::SqliteBackedCache;
 use deno_runtime::permissions::PermissionsContainer;
 use deno_runtime::*;
 
+#[deno_core::op]
+fn op_bootstrap() {
+  // noop
+  dbg!("op_bootstrap");
+}
+
 mod ts {
   use super::*;
   use crate::deno_webgpu_get_declaration;
@@ -259,6 +265,7 @@ mod ts {
         op_is_node_file::decl(),
         op_load::decl(),
         op_script_version::decl(),
+        op_bootstrap::decl(),
       ])
       .js(include_js_files! {
         dir "tsc",
@@ -371,6 +378,7 @@ fn create_cli_snapshot(snapshot_path: PathBuf) {
     // fixed, so we can reliably depend on that information.
     // .dependencies(vec!["runtime"])
     .esm(esm_files)
+    .ops(vec![op_bootstrap::decl()])
     .build()];
 
   create_snapshot(CreateSnapshotOptions {

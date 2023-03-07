@@ -17,9 +17,16 @@ mod startup_snapshot {
   use deno_cache::SqliteBackedCache;
   use deno_core::error::AnyError;
   use deno_core::include_js_files;
+  use deno_core::op;
   use deno_core::snapshot_util::*;
   use deno_core::Extension;
   use deno_core::ExtensionFileSource;
+
+  #[op]
+  fn op_bootstrap() {
+    dbg!("op_bootstrap");
+    // noop
+  }
 
   fn transpile_ts_for_snapshotting(
     file_source: &ExtensionFileSource,
@@ -211,6 +218,7 @@ mod startup_snapshot {
         "90_deno_ns.js",
         "98_global_scope.js",
       ))
+      .ops(vec![op_bootstrap::decl()])
       .build();
 
     let mut extensions_with_js: Vec<Extension> = vec![

@@ -185,19 +185,17 @@ impl MainWorker {
   pub fn bootstrap_from_options(
     main_module: ModuleSpecifier,
     permissions: PermissionsContainer,
-    options: WorkerOptions,
-  ) -> Self {
-    let bootstrap_options = options.bootstrap.clone();
-    let mut worker = Self::from_options(main_module, permissions, options);
-    worker.bootstrap(&bootstrap_options);
-    worker
-  }
-
-  pub fn from_options(
-    main_module: ModuleSpecifier,
-    permissions: PermissionsContainer,
     mut options: WorkerOptions,
   ) -> Self {
+    let bootstrap = options.bootstrap.clone();
+    #[deno_core::op]
+    pub fn op_bootstrap(
+      state: &mut deno_core::OpState,
+    ) -> deno_core::serde_json::Value {
+      let bootstrap = state.borrow::<BootstrapOptions>();
+      dbg!("bootstrap");
+      bootstrap.as_json()
+    }
     // Permissions: many ops depend on this
     let unstable = options.bootstrap.unstable;
     let enable_testing_features = options.bootstrap.enable_testing_features;
@@ -206,8 +204,10 @@ impl MainWorker {
         state.put::<PermissionsContainer>(permissions.clone());
         state.put(ops::UnstableChecker { unstable });
         state.put(ops::TestingFeaturesEnabled(enable_testing_features));
+        state.put(bootstrap.clone());
         Ok(())
       })
+      .ops(vec![op_bootstrap::decl()])
       .build();
     let exit_code = ExitCode(Arc::new(AtomicI32::new(0)));
     let create_cache = options.cache_storage_dir.map(|storage_dir| {

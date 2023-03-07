@@ -643,3 +643,12 @@ ObjectDefineProperties(globalThis, {
     configurable: true,
   },
 });
+
+const runtimeOptions = ops.op_bootstrap();
+if(runtimeOptions) bootstrapMainRuntime(runtimeOptions);
+// TODO:
+// if (runtimeOptions?.type == "main") {
+//   bootstrapMainRuntime(runtimeOptions);
+// } else if (runtimeOptions?.type == "worker") {
+//   bootstrapWorkerRuntime(runtimeOptions);
+// }
