@@ -384,6 +384,55 @@ function promiseRejectMacrotaskCallback() {
 
 let hasBootstrapped = false;
 
+ObjectDefineProperties(globalThis, windowOrWorkerGlobalScope);
+ObjectDefineProperties(globalThis, mainRuntimeGlobalProperties);
+ObjectDefineProperties(globalThis, {
+  close: util.writable(windowClose),
+  closed: util.getterOnly(() => windowIsClosing),
+});
+ObjectSetPrototypeOf(globalThis, Window.prototype);
+
+event.setEventTargetData(globalThis);
+event.saveGlobalThisReference(globalThis);
+
+event.defineEventHandler(globalThis, "error");
+event.defineEventHandler(globalThis, "load");
+event.defineEventHandler(globalThis, "beforeunload");
+event.defineEventHandler(globalThis, "unload");
+event.defineEventHandler(globalThis, "unhandledrejection");
+
+core.setPromiseRejectCallback(promiseRejectCallback);
+
+const isUnloadDispatched = SymbolFor("isUnloadDispatched");
+// Stores the flag for checking whether unload is dispatched or not.
+// This prevents the recursive dispatches of unload events.
+// See https://github.com/denoland/deno/issues/9201.
+globalThis[isUnloadDispatched] = false;
+globalThis.addEventListener("unload", () => {
+  globalThis[isUnloadDispatched] = true;
+});
+
+// These have to initialized here and not in `90_deno_ns.js` because
+// the op function that needs to be passed will be invalidated by creating
+// a snapshot
+ObjectAssign(internals, {
+  nodeUnstable: {
+    serve: flash.createServe(ops.op_node_unstable_flash_serve),
+    upgradeHttpRaw: flash.upgradeHttpRaw,
+    listenDatagram: net.createListenDatagram(
+      ops.op_node_unstable_net_listen_udp,
+      ops.op_node_unstable_net_listen_unixpacket,
+    ),
+  },
+});
+
+// FIXME(bartlomieju): temporarily add whole `Deno.core` to
+// `Deno[Deno.internal]` namespace. It should be removed and only necessary
+// methods should be left there.
+ObjectAssign(internals, {
+  core,
+});
+
 function bootstrapMainRuntime(runtimeOptions) {
   if (hasBootstrapped) {
     throw new Error("Worker runtime already bootstrapped");
@@ -411,41 +460,14 @@ function bootstrapMainRuntime(runtimeOptions) {
     location.setLocationHref(runtimeOptions.location);
   }
 
-  ObjectDefineProperties(globalThis, windowOrWorkerGlobalScope);
   if (runtimeOptions.unstableFlag) {
     ObjectDefineProperties(globalThis, unstableWindowOrWorkerGlobalScope);
   }
-  ObjectDefineProperties(globalThis, mainRuntimeGlobalProperties);
-  ObjectDefineProperties(globalThis, {
-    close: util.writable(windowClose),
-    closed: util.getterOnly(() => windowIsClosing),
-  });
-  ObjectSetPrototypeOf(globalThis, Window.prototype);
-
+  
   if (runtimeOptions.inspectFlag) {
     const consoleFromDeno = globalThis.console;
     wrapConsole(consoleFromDeno, consoleFromV8);
   }
-
-  event.setEventTargetData(globalThis);
-  event.saveGlobalThisReference(globalThis);
-
-  event.defineEventHandler(globalThis, "error");
-  event.defineEventHandler(globalThis, "load");
-  event.defineEventHandler(globalThis, "beforeunload");
-  event.defineEventHandler(globalThis, "unload");
-  event.defineEventHandler(globalThis, "unhandledrejection");
-
-  core.setPromiseRejectCallback(promiseRejectCallback);
-
-  const isUnloadDispatched = SymbolFor("isUnloadDispatched");
-  // Stores the flag for checking whether unload is dispatched or not.
-  // This prevents the recursive dispatches of unload events.
-  // See https://github.com/denoland/deno/issues/9201.
-  globalThis[isUnloadDispatched] = false;
-  globalThis.addEventListener("unload", () => {
-    globalThis_[isUnloadDispatched] = true;
-  });
 
   runtimeStart(runtimeOptions);
 
@@ -454,27 +476,6 @@ function bootstrapMainRuntime(runtimeOptions) {
   setLanguage(runtimeOptions.locale);
 
   const internalSymbol = Symbol("Deno.internal");
-
-  // These have to initialized here and not in `90_deno_ns.js` because
-  // the op function that needs to be passed will be invalidated by creating
-  // a snapshot
-  ObjectAssign(internals, {
-    nodeUnstable: {
-      serve: flash.createServe(ops.op_node_unstable_flash_serve),
-      upgradeHttpRaw: flash.upgradeHttpRaw,
-      listenDatagram: net.createListenDatagram(
-        ops.op_node_unstable_net_listen_udp,
-        ops.op_node_unstable_net_listen_unixpacket,
-      ),
-    },
-  });
-
-  // FIXME(bartlomieju): temporarily add whole `Deno.core` to
-  // `Deno[Deno.internal]` namespace. It should be removed and only necessary
-  // methods should be left there.
-  ObjectAssign(internals, {
-    core,
-  });
 
   const finalDenoNs = {
     internal: internalSymbol,

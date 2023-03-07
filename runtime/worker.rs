@@ -354,9 +354,11 @@ impl MainWorker {
     let bootstrap_fn = self.bootstrap_fn_global.take().unwrap();
     let bootstrap_fn = v8::Local::new(scope, bootstrap_fn);
     let undefined = v8::undefined(scope);
+
     bootstrap_fn
       .call(scope, undefined.into(), &[options_v8])
       .unwrap();
+  
   }
 
   /// See [JsRuntime::execute_script](deno_core::JsRuntime::execute_script)
