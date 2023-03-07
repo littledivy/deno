@@ -215,10 +215,10 @@ fn v8_init(
   );
 
   if predictable {
-    v8::V8::set_flags_from_string(&format!(
-      "{}{}",
-      flags, " --predictable --random-seed=42"
-    ));
+    // v8::V8::set_flags_from_string(&format!(
+    //   "{}{}",
+    //   flags, " --predictable --random-seed=42"
+    // ));
   } else {
     v8::V8::set_flags_from_string(flags);
   }

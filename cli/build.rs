@@ -281,21 +281,21 @@ mod ts {
       extensions: vec![],
       extensions_with_js: vec![tsc_extension],
 
-      // NOTE(bartlomieju): Compressing the TSC snapshot in debug build took
-      // ~45s on M1 MacBook Pro; without compression it took ~1s.
-      // Thus we're not not using compressed snapshot, trading off
-      // a lot of build time for some startup time in debug build.
-      #[cfg(debug_assertions)]
+      // // NOTE(bartlomieju): Compressing the TSC snapshot in debug build took
+      // // ~45s on M1 MacBook Pro; without compression it took ~1s.
+      // // Thus we're not not using compressed snapshot, trading off
+      // // a lot of build time for some startup time in debug build.
+      // #[cfg(debug_assertions)]
       compression_cb: None,
 
-      #[cfg(not(debug_assertions))]
-      compression_cb: Some(Box::new(|vec, snapshot_slice| {
-        eprintln!("Compressing TSC snapshot...");
-        vec.extend_from_slice(
-          &zstd::bulk::compress(snapshot_slice, 22)
-            .expect("snapshot compression failed"),
-        );
-      })),
+      // #[cfg(not(debug_assertions))]
+      // compression_cb: Some(Box::new(|vec, snapshot_slice| {
+      //   eprintln!("Compressing TSC snapshot...");
+      //   vec.extend_from_slice(
+      //     &zstd::bulk::compress(snapshot_slice, 22)
+      //       .expect("snapshot compression failed"),
+      //   );
+      // })),
       snapshot_module_load_cb: None,
     });
   }
@@ -379,14 +379,15 @@ fn create_cli_snapshot(snapshot_path: PathBuf) {
     startup_snapshot: Some(deno_runtime::js::deno_isolate_init()),
     extensions,
     extensions_with_js,
-    compression_cb: Some(Box::new(|vec, snapshot_slice| {
-      lzzzz::lz4_hc::compress_to_vec(
-        snapshot_slice,
-        vec,
-        lzzzz::lz4_hc::CLEVEL_MAX,
-      )
-      .expect("snapshot compression failed");
-    })),
+    compression_cb: None,
+    // compression_cb: Some(Box::new(|vec, snapshot_slice| {
+    //   lzzzz::lz4_hc::compress_to_vec(
+    //     snapshot_slice,
+    //     vec,
+    //     lzzzz::lz4_hc::CLEVEL_MAX,
+    //   )
+    //   .expect("snapshot compression failed");
+    // })),
     snapshot_module_load_cb: None,
   })
 }
