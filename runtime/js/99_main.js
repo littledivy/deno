@@ -481,6 +481,7 @@ function bootstrapMainRuntime(runtimeOptions) {
     [internalSymbol]: internals,
     resources: core.resources,
     close: core.close,
+    ops: core.ops,
     ...denoNs,
   };
   ObjectDefineProperties(finalDenoNs, {
@@ -507,7 +508,7 @@ function bootstrapMainRuntime(runtimeOptions) {
 
   // Setup `Deno` global - we're actually overriding already existing global
   // `Deno` with `Deno` namespace from "./deno.ts".
-  ObjectDefineProperty(globalThis, "Deno", util.readOnly(finalDenoNs));
+  //ObjectDefineProperty(globalThis, "Deno", util.readOnly(finalDenoNs));
 
   util.log("args", runtimeOptions.args);
 }
@@ -644,8 +645,26 @@ ObjectDefineProperties(globalThis, {
   },
 });
 
-const runtimeOptions = ops.op_bootstrap();
-if(runtimeOptions) bootstrapMainRuntime(runtimeOptions);
+bootstrapMainRuntime({
+  "args": [],
+  "cpuCount": 8,
+  "debugFlag": false,
+  "denoVersion": "1.31.1",
+  "locale": "en-US-u-va-posix",
+  "location": null,
+  "noColor": false,
+  "isTty": true,
+  "tsVersion": "4.9.4",
+  "unstableFlag": false,
+  "enableTestingFeaturesFlag": false,
+  "pid": 80407,
+  "ppid": 2469,
+  "target": "aarch64-apple-darwin",
+  "v8Version": "11.0.226.13",
+  "userAgent": "Deno/1.31.1",
+  "inspectFlag": false,
+});
+
 // TODO:
 // if (runtimeOptions?.type == "main") {
 //   bootstrapMainRuntime(runtimeOptions);
