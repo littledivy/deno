@@ -762,7 +762,7 @@ impl JsRuntime {
   }
 
   /// Collects ops from extensions & applies middleware
-  fn collect_ops(exts: &mut [Extension]) -> Vec<OpDecl> {
+  fn collect_ops(exts: &mut [Extension]) -> &'static [OpDecl] {
     for (ext, previous_exts) in
       exts.iter().enumerate().map(|(i, ext)| (ext, &exts[..i]))
     {

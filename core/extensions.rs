@@ -70,7 +70,7 @@ pub struct Extension {
   js_files: Option<Vec<ExtensionFileSource>>,
   esm_files: Option<Vec<ExtensionFileSource>>,
   esm_entry_point: Option<&'static str>,
-  ops: Option<Vec<OpDecl>>,
+  ops: Option<&'static [OpDecl]>,
   opstate_fn: Option<Box<OpStateFn>>,
   middleware_fn: Option<Box<OpMiddlewareFn>>,
   event_loop_middleware: Option<Box<OpEventLoopFn>>,
@@ -137,7 +137,7 @@ impl Extension {
   }
 
   /// Called at JsRuntime startup to initialize ops in the isolate.
-  pub fn init_ops(&mut self) -> Option<Vec<OpDecl>> {
+  pub fn init_ops(&mut self) -> Option<&'static [OpDecl]> {
     // TODO(@AaronO): maybe make op registration idempotent
     if self.initialized {
       panic!("init_ops called twice: not idempotent or correct");
@@ -194,7 +194,7 @@ pub struct ExtensionBuilder {
   js: Vec<ExtensionFileSource>,
   esm: Vec<ExtensionFileSource>,
   esm_entry_point: Option<&'static str>,
-  ops: Vec<OpDecl>,
+  ops: Option<&'static [OpDecl]>,
   state: Option<Box<OpStateFn>>,
   middleware: Option<Box<OpMiddlewareFn>>,
   event_loop_middleware: Option<Box<OpEventLoopFn>>,
@@ -235,9 +235,8 @@ impl ExtensionBuilder {
     self
   }
 
-  pub fn ops(&mut self, ops: Vec<OpDecl>) -> &mut Self {
-    self.ops.extend(ops);
-    self
+  pub fn ops(&mut self, ops: &'static [OpDecl]) -> &mut Self {
+    self.ops = Some(ops);
   }
 
   pub fn state<F>(&mut self, opstate_fn: F) -> &mut Self
@@ -267,13 +266,12 @@ impl ExtensionBuilder {
   pub fn build(&mut self) -> Extension {
     let js_files = Some(std::mem::take(&mut self.js));
     let esm_files = Some(std::mem::take(&mut self.esm));
-    let ops = Some(std::mem::take(&mut self.ops));
     let deps = Some(std::mem::take(&mut self.deps));
     Extension {
       js_files,
       esm_files,
       esm_entry_point: self.esm_entry_point.take(),
-      ops,
+      ops: self.ops.take(),
       opstate_fn: self.state.take(),
       middleware_fn: self.middleware.take(),
       event_loop_middleware: self.event_loop_middleware.take(),
