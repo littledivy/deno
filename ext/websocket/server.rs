@@ -52,6 +52,26 @@ pub async fn ws_create_server_stream(
 }
 
 #[op]
+pub fn op_server_ws_try_write_binary(
+  state: &mut OpState,
+  rid: u32,
+  data: &mut [u8],
+) -> Result<bool, AnyError> {
+  let resource = state.resource_table.get::<ServerWebSocket>(rid)?;
+
+  let mut ws = match RcRef::map(&resource, |r| &r.ws).try_borrow_mut() {
+    Some(ws) => ws,
+    None => return Ok(false),
+  };
+
+  let done = ws.try_write(
+    Frame::new(true, OpCode::Binary, None, data.to_vec()),
+    |stream, frame| stream.try_write(frame),
+  );
+  Ok(done)
+}
+
+#[op]
 pub async fn op_server_ws_send_binary(
   state: Rc<RefCell<OpState>>,
   rid: ResourceId,

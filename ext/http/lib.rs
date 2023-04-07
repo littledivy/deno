@@ -1162,7 +1162,22 @@ impl tokio::io::AsyncWrite for UpgradedStream {
   }
 }
 
-impl deno_websocket::Upgraded for UpgradedStream {}
+use deno_core::futures::task::noop_waker_ref;
+
+impl deno_websocket::Upgraded for UpgradedStream {
+  fn try_write(&mut self, buf: &[u8]) -> Result<usize, std::io::Error> {
+    // Poll write
+    let mut cx = Context::from_waker(noop_waker_ref());
+    match Pin::new(&mut self.0).poll_write(&mut cx, buf) {
+      Poll::Ready(Ok(n)) => Ok(n),
+      Poll::Ready(Err(e)) => Err(e),
+      Poll::Pending => Err(std::io::Error::new(
+        std::io::ErrorKind::WouldBlock,
+        "try_write",
+      )),
+    }
+  }
+}
 
 #[op]
 async fn op_http_upgrade_websocket(

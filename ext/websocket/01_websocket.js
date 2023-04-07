@@ -319,6 +319,15 @@ class WebSocket extends EventTarget {
      */
     const sendTypedArray = (view, byteLength) => {
       this[_bufferedAmount] += byteLength;
+      if (this[_role] === SERVER) {
+        if (ops.op_server_ws_try_write_binary(this[_rid], view)) {
+          queueMicrotask(() => {
+            this[_bufferedAmount] -= byteLength;
+          });
+          return;
+        }
+      }
+
       PromisePrototypeThen(
         core.opAsync2(
           this[_role] === SERVER
@@ -352,7 +361,7 @@ class WebSocket extends EventTarget {
       }
     } else if (ObjectPrototypeIsPrototypeOf(ArrayBufferPrototype, data)) {
       sendTypedArray(
-        new DataView(data),
+        new Uint8Array(data),
         ArrayBufferPrototypeGetByteLength(data),
       );
     } else {

@@ -281,6 +281,8 @@ opt-level = 3
 opt-level = 3
 [profile.release.package.deno_websocket]
 opt-level = 3
+[profile.release.package.fastwebsockets]
+opt-level = 3
 [profile.release.package.deno_napi]
 opt-level = 3
 [profile.release.package.test_napi]

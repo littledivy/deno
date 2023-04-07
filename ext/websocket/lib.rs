@@ -90,7 +90,11 @@ pub enum WebSocketStreamType {
   },
 }
 
-pub trait Upgraded: AsyncRead + AsyncWrite + Unpin {}
+pub trait Upgraded: AsyncRead + AsyncWrite + Unpin {
+  fn try_write(&mut self, _buf: &[u8]) -> Result<usize, std::io::Error> {
+    Ok(0)
+  }
+}
 
 pub struct WsStreamResource {
   pub stream: WebSocketStreamType,
@@ -528,6 +532,7 @@ deno_core::extension!(deno_websocket,
     server::op_server_ws_next_event,
     server::op_server_ws_send_binary,
     server::op_server_ws_send_text,
+    server::op_server_ws_try_write_binary,
   ],
   esm = [ "01_websocket.js", "02_websocketstream.js" ],
   options = {
