@@ -12,7 +12,7 @@ serve((req) => {
       ops.op_server_ws_next_event(
         rid,
         ([kind, value]) => {
-            ops.op_server_ws_try_write_binary(rid, value);
+            ops.op_server_ws_try_write_binary(rid, new Uint8Array(value));
         }      
       );
   };
