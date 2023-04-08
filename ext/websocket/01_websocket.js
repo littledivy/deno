@@ -452,96 +452,95 @@ class WebSocket extends EventTarget {
   }
 
   async [_eventLoop]() {
-    while (this[_readyState] !== CLOSED) {
-      const { 0: kind, 1: value } = await core.opAsync2(
-        this[_role] === SERVER ? "op_server_ws_next_event" : "op_ws_next_event",
+    ops
+      [this[_role] === SERVER ? "op_server_ws_next_event" : "op_ws_next_event"](
         this[_rid],
-      );
+        ([kind, value]) => {
+          switch (kind) {
+            case 0: {
+              /* string */
+              this[_serverHandleIdleTimeout]();
+              const event = new MessageEvent("message", {
+                data: value,
+                origin: this[_url],
+              });
+              this.dispatchEvent(event);
+              break;
+            }
+            case 1: {
+              /* binary */
+              this[_serverHandleIdleTimeout]();
+              let data;
 
-      switch (kind) {
-        case 0: {
-          /* string */
-          this[_serverHandleIdleTimeout]();
-          const event = new MessageEvent("message", {
-            data: value,
-            origin: this[_url],
-          });
-          this.dispatchEvent(event);
-          break;
-        }
-        case 1: {
-          /* binary */
-          this[_serverHandleIdleTimeout]();
-          let data;
+              if (this.binaryType === "blob") {
+                data = new Blob([value]);
+              } else {
+                data = value;
+              }
 
-          if (this.binaryType === "blob") {
-            data = new Blob([value]);
-          } else {
-            data = value;
-          }
+              const event = new MessageEvent("message", {
+                data,
+                origin: this[_url],
+                [_skipInternalInit]: true,
+              });
+              this.dispatchEvent(event);
+              break;
+            }
+            case 2: {
+              /* pong */
+              this[_serverHandleIdleTimeout]();
+              break;
+            }
+            case 5: {
+              /* error */
+              this[_readyState] = CLOSED;
 
-          const event = new MessageEvent("message", {
-            data,
-            origin: this[_url],
-            [_skipInternalInit]: true,
-          });
-          this.dispatchEvent(event);
-          break;
-        }
-        case 2: {
-          /* pong */
-          this[_serverHandleIdleTimeout]();
-          break;
-        }
-        case 5: {
-          /* error */
-          this[_readyState] = CLOSED;
+              const errorEv = new ErrorEvent("error", {
+                message: value,
+              });
+              this.dispatchEvent(errorEv);
 
-          const errorEv = new ErrorEvent("error", {
-            message: value,
-          });
-          this.dispatchEvent(errorEv);
+              const closeEv = new CloseEvent("close");
+              this.dispatchEvent(closeEv);
+              core.tryClose(this[_rid]);
+              break;
+            }
+            case 3: {
+              /* ping */
+              break;
+            }
+            default: {
+              /* close */
+              const code = kind;
+              const prevState = this[_readyState];
+              this[_readyState] = CLOSED;
+              clearTimeout(this[_idleTimeoutTimeout]);
 
-          const closeEv = new CloseEvent("close");
-          this.dispatchEvent(closeEv);
-          core.tryClose(this[_rid]);
-          break;
-        }
-        case 3: {
-          /* ping */
-          break;
-        }
-        default: {
-          /* close */
-          const code = kind;
-          const prevState = this[_readyState];
-          this[_readyState] = CLOSED;
-          clearTimeout(this[_idleTimeoutTimeout]);
+              if (prevState === OPEN) {
+                try {
+                  // await core.opAsync(
+                  //   this[_role] === SERVER ? "op_server_ws_close" : "op_ws_close",
+                  //   this[_rid],
+                  //   code,
+                  //   value,
+                  // );
+                } catch {
+                  // ignore failures
+                }
+              }
 
-          if (prevState === OPEN) {
-            try {
-              await core.opAsync(
-                this[_role] === SERVER ? "op_server_ws_close" : "op_ws_close",
-                this[_rid],
-                code,
-                value,
-              );
-            } catch {
-              // ignore failures
+              const event = new CloseEvent("close", {
+                wasClean: true,
+                code: code,
+                reason: value,
+              });
+              this.dispatchEvent(event);
+              core.tryClose(this[_rid]);
+              break;
             }
           }
-
-          const event = new CloseEvent("close", {
-            wasClean: true,
-            code: code,
-            reason: value,
-          });
-          this.dispatchEvent(event);
-          core.tryClose(this[_rid]);
-          break;
-        }
-      }
-    }
+        },
+      );
   }
 
   [_serverHandleIdleTimeout]() {

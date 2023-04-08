@@ -6,6 +6,8 @@ use crate::Upgraded;
 use deno_core::error::type_error;
 use deno_core::error::AnyError;
 use deno_core::op;
+use deno_core::serde_v8;
+use deno_core::v8;
 use deno_core::AsyncRefCell;
 use deno_core::OpState;
 use deno_core::RcRef;
@@ -15,6 +17,7 @@ use deno_core::StringOrBuffer;
 use deno_core::ZeroCopyBuf;
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 
@@ -156,56 +159,118 @@ pub async fn op_server_ws_close(
   Ok(())
 }
 
-#[op]
-pub async fn op_server_ws_next_event(
+#[op(v8)]
+pub fn op_server_ws_next_event(
+  scope: &mut v8::HandleScope,
   state: Rc<RefCell<OpState>>,
   rid: ResourceId,
-) -> Result<(u16, StringOrBuffer), AnyError> {
+  callback: serde_v8::Value,
+) -> Result<(), AnyError> {
+  let cb = event::JsCb::new(scope, callback);
+
   let resource = state
     .borrow_mut()
     .resource_table
-    .get::<ServerWebSocket>(rid)?;
-  let mut ws = RcRef::map(&resource, |r| &r.ws).borrow_mut().await;
-  let val = match ws.read_frame().await {
-    Ok(val) => val,
-    Err(err) => {
-      return Ok((
-        MessageKind::Error as u16,
-        StringOrBuffer::String(err.to_string()),
-      ))
-    }
-  };
+    .get::<ServerWebSocket>(rid)
+    .unwrap();
+  tokio::task::spawn_local(async move {
+    loop {
+      let mut ws = RcRef::map(&resource, |r| &r.ws).borrow_mut().await;
+      let val = match ws.read_frame().await {
+        Ok(val) => val,
+        Err(err) => {
+          unsafe {
+            cb.call((
+              MessageKind::Error as u16,
+              StringOrBuffer::String(err.to_string()),
+            ))
+          };
+          continue;
+        }
+      };
 
-  let res = match val.opcode {
-    OpCode::Text => (
-      MessageKind::Text as u16,
-      StringOrBuffer::String(String::from_utf8(val.payload).unwrap()),
-    ),
-    OpCode::Binary => (
-      MessageKind::Binary as u16,
-      StringOrBuffer::Buffer(val.payload.into()),
-    ),
-    OpCode::Close => {
-      if val.payload.len() < 2 {
-        return Ok((1005, StringOrBuffer::String("".to_string())));
+      let res = match val.opcode {
+        OpCode::Text => (
+          MessageKind::Text as u16,
+          StringOrBuffer::String(String::from_utf8(val.payload).unwrap()),
+        ),
+        OpCode::Binary => (
+          MessageKind::Binary as u16,
+          StringOrBuffer::Buffer(val.payload.into()),
+        ),
+        OpCode::Close => {
+          if val.payload.len() < 2 {
+            (1005, StringOrBuffer::String("".to_string()))
+          } else {
+            let close_code = CloseCode::from(u16::from_be_bytes([
+              val.payload[0],
+              val.payload[1],
+            ]));
+            let reason = String::from_utf8(val.payload[2..].to_vec()).unwrap();
+            (close_code.into(), StringOrBuffer::String(reason))
+          }
+        }
+        OpCode::Ping => (
+          MessageKind::Ping as u16,
+          StringOrBuffer::Buffer(vec![].into()),
+        ),
+        OpCode::Pong => (
+          MessageKind::Pong as u16,
+          StringOrBuffer::Buffer(vec![].into()),
+        ),
+        OpCode::Continuation => {
+          unreachable!("Continuation frames should be handled internally")
+        }
+      };
+
+      unsafe { cb.call(res) };
+    }
+  });
+
+  Ok(())
+}
+
+mod event {
+  use deno_core::serde_v8;
+  use deno_core::v8;
+
+  #[derive(Clone, Copy)]
+  pub(crate) struct JsCb {
+    isolate: *mut v8::Isolate,
+    js_cb: *mut v8::Function,
+    context: *mut v8::Context,
+  }
+
+  impl JsCb {
+    pub fn new(scope: &mut v8::HandleScope, cb: serde_v8::Value) -> Self {
+      let current_context = scope.get_current_context();
+      let context = v8::Global::new(scope, current_context).into_raw();
+      let isolate: *mut v8::Isolate = &mut *scope as &mut v8::Isolate;
+      Self {
+        isolate,
+        js_cb: v8::Global::new(scope, cb.v8_value).into_raw().as_ptr()
+          as *mut v8::Function,
+        context: context.as_ptr(),
       }
+    }
 
-      let close_code =
-        CloseCode::from(u16::from_be_bytes([val.payload[0], val.payload[1]]));
-      let reason = String::from_utf8(val.payload[2..].to_vec()).unwrap();
-      (close_code.into(), StringOrBuffer::String(reason))
+    // SAFETY: Must be called from the same thread as the isolate.
+    pub unsafe fn call(&self, value: (u16, serde_v8::StringOrBuffer)) {
+      let js_cb = unsafe { &mut *self.js_cb };
+      let isolate = unsafe { &mut *self.isolate };
+      let context = unsafe {
+        std::mem::transmute::<*mut v8::Context, v8::Local<v8::Context>>(
+          self.context,
+        )
+      };
+      let recv = v8::undefined(isolate).into();
+      let scope = &mut unsafe { v8::CallbackScope::new(context) };
+      let args = &[serde_v8::to_v8(scope, value).unwrap()];
+      let _ = js_cb.call(scope, recv, args);
     }
-    OpCode::Ping => (
-      MessageKind::Ping as u16,
-      StringOrBuffer::Buffer(vec![].into()),
-    ),
-    OpCode::Pong => (
-      MessageKind::Pong as u16,
-      StringOrBuffer::Buffer(vec![].into()),
-    ),
-    OpCode::Continuation => {
-      return Err(type_error("Unexpected continuation frame"))
-    }
-  };
-  Ok(res)
+  }
+
+  // SAFETY: JsCb is Send + Sync to bypass restrictions in tokio::spawn.
+  unsafe impl Send for JsCb {}
+  unsafe impl Sync for JsCb {}
 }
