@@ -52,7 +52,8 @@ fn op_http_start(
     let (read_half, write_half) = resource.into_inner();
     let tcp_stream = read_half.reunite(write_half)?;
     let addr = tcp_stream.local_addr()?;
-    let strm_ptr = &tcp_stream as *const TcpStream;
+    let tcp_stream = Box::new(tcp_stream);
+    let strm_ptr = &*tcp_stream as *const TcpStream;
     return http_create_conn_resource(
       state,
       tcp_stream,
