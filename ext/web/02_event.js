@@ -196,7 +196,8 @@ class Event {
         currentTarget: null,
         eventPhase: Event.NONE,
         target: null,
-        timeStamp: DateNow(),
+        // timeStamp: DateNow(),
+        timeStamp: 0,
       };
       // TODO(@littledivy): Not spec compliant but performance is hurt badly
       // for users of `_skipInternalInit`.
@@ -568,6 +569,7 @@ function dispatch(
         );
       }
     }
+    return;
   }
   let clearTargets = false;
   let activationTarget = null;
