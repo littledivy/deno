@@ -52,7 +52,25 @@ fn op_http_start(
     let (read_half, write_half) = resource.into_inner();
     let tcp_stream = read_half.reunite(write_half)?;
     let addr = tcp_stream.local_addr()?;
-    return http_create_conn_resource(state, tcp_stream, addr, "http");
+    let tcp_stream_clone = {
+      // As raw fd is not cloneable, we need to clone the TcpStream to get a
+      // new fd.
+      use std::os::fd::AsRawFd;
+      use std::os::fd::FromRawFd;
+      let fd = tcp_stream.as_raw_fd();
+      let std_stream = unsafe { std::net::TcpStream::from_raw_fd(fd) }.try_clone().unwrap();
+      std_stream.set_nonblocking(true).unwrap();
+      TcpStream::from_std(std_stream).unwrap()
+    };
+    return http_create_conn_resource(
+      state,
+      tcp_stream_clone,
+      addr,
+      "http",
+      Some(Box::new(move |data: &[u8]| {
+        tcp_stream.try_write(data)
+      })),
+    );
   }
 
   if let Ok(resource_rc) = state
@@ -67,7 +85,7 @@ fn op_http_start(
     let (read_half, write_half) = resource.into_inner();
     let tls_stream = read_half.reunite(write_half);
     let addr = tls_stream.get_ref().0.local_addr()?;
-    return http_create_conn_resource(state, tls_stream, addr, "https");
+    return http_create_conn_resource(state, tls_stream, addr, "https", None);
   }
 
   #[cfg(unix)]
@@ -85,7 +103,13 @@ fn op_http_start(
     let (read_half, write_half) = resource.into_inner();
     let unix_stream = read_half.reunite(write_half)?;
     let addr = unix_stream.local_addr()?;
-    return http_create_conn_resource(state, unix_stream, addr, "http+unix");
+    return http_create_conn_resource(
+      state,
+      unix_stream,
+      addr,
+      "http+unix",
+      None,
+    );
   }
 
   Err(bad_resource_id())

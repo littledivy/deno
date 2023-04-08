@@ -188,6 +188,7 @@ pub fn op_server_ws_next_event(
           continue;
         }
       };
+      drop(ws);
 
       let res = match val.opcode {
         OpCode::Text => (

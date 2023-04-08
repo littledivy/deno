@@ -115,16 +115,24 @@ impl From<tokio::net::unix::SocketAddr> for HttpSocketAddr {
   }
 }
 
+pub type TryWriteFn = dyn FnMut(&[u8]) -> io::Result<usize>;
+
 struct HttpConnResource {
   addr: HttpSocketAddr,
   scheme: &'static str,
   acceptors_tx: mpsc::UnboundedSender<HttpAcceptor>,
   closed_fut: Shared<RemoteHandle<Result<(), Arc<hyper::Error>>>>,
   cancel_handle: Rc<CancelHandle>, // Closes gracefully and cancels accept ops.
+  try_write_fn: Rc<RefCell<Option<Box<TryWriteFn>>>>,
 }
 
 impl HttpConnResource {
-  fn new<S>(io: S, scheme: &'static str, addr: HttpSocketAddr) -> Self
+  fn new<S>(
+    io: S,
+    scheme: &'static str,
+    addr: HttpSocketAddr,
+    try_write_fn: Option<Box<TryWriteFn>>,
+  ) -> Self
   where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
   {
@@ -165,6 +173,7 @@ impl HttpConnResource {
       acceptors_tx,
       closed_fut,
       cancel_handle,
+      try_write_fn: Rc::new(RefCell::new(try_write_fn)),
     }
   }
 
@@ -233,12 +242,13 @@ pub fn http_create_conn_resource<S, A>(
   io: S,
   addr: A,
   scheme: &'static str,
+  try_write_fn: Option<Box<TryWriteFn>>,
 ) -> Result<ResourceId, AnyError>
 where
   S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
   A: Into<HttpSocketAddr>,
 {
-  let conn = HttpConnResource::new(io, scheme, addr.into());
+  let conn = HttpConnResource::new(io, scheme, addr.into(), try_write_fn);
   let rid = state.resource_table.add(conn);
   Ok(rid)
 }
@@ -1129,7 +1139,10 @@ async fn op_http_upgrade_early(
   Ok(rid)
 }
 
-struct UpgradedStream(hyper::upgrade::Upgraded);
+struct UpgradedStream(
+  hyper::upgrade::Upgraded,
+  Rc<RefCell<Option<Box<TryWriteFn>>>>,
+);
 impl tokio::io::AsyncRead for UpgradedStream {
   fn poll_read(
     self: Pin<&mut Self>,
@@ -1166,16 +1179,8 @@ use deno_core::futures::task::noop_waker_ref;
 
 impl deno_websocket::Upgraded for UpgradedStream {
   fn try_write(&mut self, buf: &[u8]) -> Result<usize, std::io::Error> {
-    // Poll write
-    let mut cx = Context::from_waker(noop_waker_ref());
-    match Pin::new(&mut self.0).poll_write(&mut cx, buf) {
-      Poll::Ready(Ok(n)) => Ok(n),
-      Poll::Ready(Err(e)) => Err(e),
-      Poll::Pending => Err(std::io::Error::new(
-        std::io::ErrorKind::WouldBlock,
-        "try_write",
-      )),
-    }
+    let r = self.1.borrow_mut().as_mut().unwrap()(buf);
+    r
   }
 }
 
@@ -1198,9 +1203,11 @@ async fn op_http_upgrade_websocket(
   };
 
   let transport = hyper::upgrade::on(request).await?;
-  let ws_rid =
-    ws_create_server_stream(&state, Box::pin(UpgradedStream(transport)))
-      .await?;
+  let ws_rid = ws_create_server_stream(
+    &state,
+    Box::pin(UpgradedStream(transport, stream.conn.try_write_fn.clone())),
+  )
+  .await?;
   Ok(ws_rid)
 }
 
