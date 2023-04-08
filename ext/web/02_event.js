@@ -552,6 +552,23 @@ function dispatch(
   eventImpl,
   targetOverride,
 ) {
+  {
+    const path = getPath(eventImpl);
+    for (let i = path.length - 1; i >= 0; --i) {
+      const tuple = path[i];
+
+      const { type } = eventImpl;
+      const handlers = getListeners(tuple.item)[type];
+      for (let j = 0; j < handlers.length; ++j) {
+        const listener = handlers[j];
+
+        listener.callback(
+          eventImpl.currentTarget,
+          eventImpl,
+        );
+      }
+    }
+  }
   let clearTargets = false;
   let activationTarget = null;
 
@@ -1521,6 +1538,7 @@ export {
   CloseEvent,
   CustomEvent,
   defineEventHandler,
+  dispatch,
   ErrorEvent,
   Event,
   EventTarget,
