@@ -52,22 +52,14 @@ fn op_http_start(
     let (read_half, write_half) = resource.into_inner();
     let tcp_stream = read_half.reunite(write_half)?;
     let addr = tcp_stream.local_addr()?;
-    let tcp_stream_clone = {
-      // As raw fd is not cloneable, we need to clone the TcpStream to get a
-      // new fd.
-      use std::os::fd::AsRawFd;
-      use std::os::fd::FromRawFd;
-      let fd = tcp_stream.as_raw_fd();
-      let std_stream = unsafe { std::net::TcpStream::from_raw_fd(fd) }.try_clone().unwrap();
-      std_stream.set_nonblocking(true).unwrap();
-      TcpStream::from_std(std_stream).unwrap()
-    };
+    let strm_ptr = &tcp_stream as *const TcpStream;
     return http_create_conn_resource(
       state,
-      tcp_stream_clone,
+      tcp_stream,
       addr,
       "http",
       Some(Box::new(move |data: &[u8]| {
+        let tcp_stream = unsafe { &*strm_ptr };
         tcp_stream.try_write(data)
       })),
     );
