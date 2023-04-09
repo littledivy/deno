@@ -264,10 +264,12 @@ mod event {
           self.context,
         )
       };
+
       let recv = v8::undefined(isolate).into();
       let scope = &mut unsafe { v8::CallbackScope::new(context) };
-      let args = &[serde_v8::to_v8(scope, value).unwrap()];
-      let _ = js_cb.call(scope, recv, args);
+      let kind = v8::Integer::new_from_unsigned(scope, value.0.into());
+      let value = serde_v8::to_v8(scope, value.1).unwrap();
+      let _ = js_cb.call(scope, recv, &[kind.into(), value]);
     }
   }
 
