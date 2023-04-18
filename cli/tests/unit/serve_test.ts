@@ -2,6 +2,7 @@
 
 // deno-lint-ignore-file
 
+import { assertMatch } from "https://deno.land/std@v0.42.0/testing/asserts.ts";
 import { Buffer, BufReader, BufWriter } from "../../../test_util/std/io/mod.ts";
 import { TextProtoReader } from "../testdata/run/textproto.ts";
 import {
@@ -30,6 +31,27 @@ function onListen<T>(
     p.resolve();
   };
 }
+
+Deno.test(async function httpServerShutsDownPortBeforeResolving() {
+  const ac = new AbortController();
+  const listeningPromise = deferred();
+
+  const server = Deno.serve({
+    handler: (_req) => new Response("ok"),
+    port: 4501,
+    signal: ac.signal,
+    onListen: onListen(listeningPromise),
+  });
+
+  await listeningPromise;
+  assertThrows(() => Deno.listen({ port: 4501 }));
+
+  ac.abort();
+  await server;
+
+  const listener = Deno.listen({ port: 4501 });
+  listener!.close();
+});
 
 Deno.test(async function httpServerCanResolveHostnames() {
   const ac = new AbortController();
@@ -238,7 +260,7 @@ Deno.test(
     console.log = (msg) => {
       try {
         const match = msg.match(/Listening on http:\/\/localhost:(\d+)\//);
-        assert(!!match);
+        assert(!!match, `Didn't match ${msg}`);
         const port = +match[1];
         assert(port > 0 && port < 65536);
       } finally {
@@ -536,7 +558,7 @@ Deno.test({ permissions: { net: true } }, async function httpServerWebSocket() {
         response,
         socket,
       } = Deno.upgradeWebSocket(request);
-      socket.onerror = () => fail();
+      socket.onerror = (e) => { console.error(e); fail(); }
       socket.onmessage = (m) => {
         socket.send(m.data);
         socket.close(1001);
@@ -553,7 +575,7 @@ Deno.test({ permissions: { net: true } }, async function httpServerWebSocket() {
   const def = deferred();
   const ws = new WebSocket("ws://localhost:4501");
   ws.onmessage = (m) => assertEquals(m.data, "foo");
-  ws.onerror = () => fail();
+  ws.onerror = (e) => { console.error(e); fail(); }
   ws.onclose = () => def.resolve();
   ws.onopen = () => ws.send("foo");
 
@@ -561,6 +583,44 @@ Deno.test({ permissions: { net: true } }, async function httpServerWebSocket() {
   ac.abort();
   await server;
 });
+
+Deno.test(
+  { permissions: { net: true } },
+  async function httpServerWebSocketCanAccessRequest() {
+    const ac = new AbortController();
+    const listeningPromise = deferred();
+    const server = Deno.serve({
+      handler: async (request) => {
+        const {
+          response,
+          socket,
+        } = Deno.upgradeWebSocket(request);
+        socket.onerror = (e) => { console.error(e); fail(); }
+        socket.onmessage = (m) => {
+          socket.send(request.url.toString());
+          socket.close(1001);
+        };
+        return response;
+      },
+      port: 4501,
+      signal: ac.signal,
+      onListen: onListen(listeningPromise),
+      onError: createOnErrorCb(ac),
+    });
+
+    await listeningPromise;
+    const def = deferred();
+    const ws = new WebSocket("ws://localhost:4501");
+    ws.onmessage = (m) => assertEquals(m.data, "http://localhost:4501/");
+    ws.onerror = (e) => { console.error(e); fail(); }
+    ws.onclose = () => def.resolve();
+    ws.onopen = () => ws.send("foo");
+
+    await def;
+    ac.abort();
+    await server;
+  },
+);
 
 Deno.test(
   { permissions: { net: true } },
@@ -682,47 +742,46 @@ Deno.test(
   },
 );
 
-// FIXME: auto request body reading is intefering with passing it as response.
-// Deno.test(
-//   { permissions: { net: true } },
-//   async function httpServerStreamDuplex() {
-//     const promise = deferred();
-//     const ac = new AbortController();
+Deno.test(
+  { permissions: { net: true } },
+  async function httpServerStreamDuplex() {
+    const promise = deferred();
+    const ac = new AbortController();
 
-//     const server = Deno.serve(request => {
-//       assert(request.body);
+    const server = Deno.serve((request) => {
+      assert(request.body);
 
-//       promise.resolve();
-//       return new Response(request.body);
-//     }, { port: 2333, signal: ac.signal });
+      promise.resolve();
+      return new Response(request.body);
+    }, { port: 2333, signal: ac.signal });
 
-//     const ts = new TransformStream();
-//     const writable = ts.writable.getWriter();
+    const ts = new TransformStream();
+    const writable = ts.writable.getWriter();
 
-//     const resp = await fetch("http://127.0.0.1:2333/", {
-//       method: "POST",
-//       body: ts.readable,
-//     });
+    const resp = await fetch("http://127.0.0.1:2333/", {
+      method: "POST",
+      body: ts.readable,
+    });
 
-//     await promise;
-//     assert(resp.body);
-//     const reader = resp.body.getReader();
-//     await writable.write(new Uint8Array([1]));
-//     const chunk1 = await reader.read();
-//     assert(!chunk1.done);
-//     assertEquals(chunk1.value, new Uint8Array([1]));
-//     await writable.write(new Uint8Array([2]));
-//     const chunk2 = await reader.read();
-//     assert(!chunk2.done);
-//     assertEquals(chunk2.value, new Uint8Array([2]));
-//     await writable.close();
-//     const chunk3 = await reader.read();
-//     assert(chunk3.done);
+    await promise;
+    assert(resp.body);
+    const reader = resp.body.getReader();
+    await writable.write(new Uint8Array([1]));
+    const chunk1 = await reader.read();
+    assert(!chunk1.done);
+    assertEquals(chunk1.value, new Uint8Array([1]));
+    await writable.write(new Uint8Array([2]));
+    const chunk2 = await reader.read();
+    assert(!chunk2.done);
+    assertEquals(chunk2.value, new Uint8Array([2]));
+    await writable.close();
+    const chunk3 = await reader.read();
+    assert(chunk3.done);
 
-//     ac.abort();
-//     await server;
-//   },
-// );
+    ac.abort();
+    await server;
+  },
+);
 
 Deno.test(
   { permissions: { net: true } },
@@ -867,10 +926,10 @@ Deno.test(
     let responseText = new TextDecoder("iso-8859-1").decode(buf);
     clientConn.close();
 
-    assert(/\r\n[Xx]-[Hh]eader-[Tt]est: Æ\r\n/.test(responseText));
-
     ac.abort();
     await server;
+
+    assertMatch(responseText, /\r\n[Xx]-[Hh]eader-[Tt]est: Æ\r\n/);
   },
 );
 
@@ -1355,12 +1414,11 @@ createServerLengthTest("autoResponseWithKnownLengthEmpty", {
   expects_con_len: true,
 });
 
-// FIXME: https://github.com/denoland/deno/issues/15892
-// createServerLengthTest("autoResponseWithUnknownLengthEmpty", {
-//   body: stream(""),
-//   expects_chunked: true,
-//   expects_con_len: false,
-// });
+createServerLengthTest("autoResponseWithUnknownLengthEmpty", {
+  body: stream(""),
+  expects_chunked: true,
+  expects_con_len: false,
+});
 
 Deno.test(
   { permissions: { net: true } },
@@ -1841,6 +1899,7 @@ Deno.test(
         method: "GET",
         headers: { "connection": "close" },
       });
+      assertEquals(resp.status, 204);
       assertEquals(resp.headers.get("Content-Length"), null);
     } finally {
       ac.abort();
