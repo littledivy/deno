@@ -37,8 +37,6 @@ const {
   Uint8ArrayPrototype,
 } = primordials;
 
-// Symbol we use to communicate to the rest of Deno that we handle upgrades ourselves
-const _wantsUpgrade = Symbol("_wantsUpgrade");
 const _upgraded = Symbol("_upgraded");
 
 const INTERNAL_SERVER_ERROR = new Response("Internal Server Error", {
@@ -71,7 +69,7 @@ class InnerRequest {
     return this.#upgraded;
   }
 
-  [_wantsUpgrade](upgradeType, ...originalArgs) {
+  _wantsUpgrade(upgradeType, ...originalArgs) {
     this.#upgraded = true;
 
     // upgradeHttp is async
@@ -98,12 +96,12 @@ class InnerRequest {
       // Start the upgrade in the background.
       (async () => {
         try {
-          const upgrade = await core.opAsync2(
+          const [upgrade, extra_bytes] = await core.opAsync2(
             "op_upgrade",
             this.#slabId,
             response.headerList,
           );
-          const wsRid = core.ops.op_ws_server_create(upgrade);
+          const wsRid = core.ops.op_ws_server_create(upgrade, extra_bytes);
           ws[_rid] = wsRid;
           ws[_readyState] = WebSocket.OPEN;
           ws[_role] = SERVER;
@@ -485,4 +483,4 @@ async function serve(arg1, arg2) {
   }
 }
 
-export { _wantsUpgrade, serve };
+export { serve };

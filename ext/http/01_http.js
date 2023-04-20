@@ -41,7 +41,7 @@ import {
   readableStreamForRid,
   ReadableStreamPrototype,
 } from "ext:deno_web/06_streams.js";
-import { _wantsUpgrade, serve } from "ext:deno_http/00_serve.js";
+import { serve } from "ext:deno_http/00_serve.js";
 const {
   ArrayPrototypeIncludes,
   ArrayPrototypeMap,
@@ -461,8 +461,8 @@ function upgradeWebSocket(request, options = {}) {
   socket[_idleTimeoutDuration] = options.idleTimeout ?? 120;
   socket[_idleTimeoutTimeout] = null;
 
-  if (inner[_wantsUpgrade]) {
-    return inner[_wantsUpgrade]("upgradeWebSocket", r, socket);
+  if (inner._wantsUpgrade) {
+    return inner._wantsUpgrade("upgradeWebSocket", r, socket);
   }
 
   const response = fromInnerResponse(r, "immutable");
@@ -474,8 +474,8 @@ function upgradeWebSocket(request, options = {}) {
 
 function upgradeHttp(req) {
   const inner = toInnerRequest(req);
-  if (inner[_wantsUpgrade]) {
-    return inner[_wantsUpgrade]("upgradeHttp", arguments);
+  if (inner._wantsUpgrade) {
+    return inner._wantsUpgrade("upgradeHttp", arguments);
   }
 
   req[_deferred] = new Deferred();
@@ -484,8 +484,8 @@ function upgradeHttp(req) {
 
 async function upgradeHttpRaw(req, tcpConn) {
   const inner = toInnerRequest(req);
-  if (inner[_wantsUpgrade]) {
-    return inner[_wantsUpgrade]("upgradeHttpRaw", arguments);
+  if (inner._wantsUpgrade) {
+    return inner._wantsUpgrade("upgradeHttpRaw", arguments);
   }
 
   const res = await core.opAsync("op_http_upgrade_early", inner[streamRid]);

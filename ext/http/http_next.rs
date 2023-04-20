@@ -199,7 +199,7 @@ pub async fn op_upgrade(
   state: Rc<RefCell<OpState>>,
   index: usize,
   headers: Vec<(ByteString, ByteString)>,
-) -> Result<ResourceId, AnyError> {
+) -> Result<(ResourceId, ZeroCopyBuf), AnyError> {
   // Stage 1: set the respnse to 101 Switching Protocols and send it
   let upgrade = with_http_mut(index, |http| {
     // Manually perform the upgrade. We're peeking into hyper's underlying machinery here a bit
@@ -222,12 +222,15 @@ pub async fn op_upgrade(
 
   // Stage 3: return the extracted raw network stream
   let (stream, bytes) = extract_network_stream(upgraded);
-  // TODO(mmastrac): Handle these bytes
-  debug_assert!(bytes.is_empty());
-  return put_network_stream_resource(
-    &mut state.borrow_mut().resource_table,
-    stream,
-  );
+
+  // We're allocating for those extra bytes, but they are probably going to be empty most of the time
+  return Ok((
+    put_network_stream_resource(
+      &mut state.borrow_mut().resource_table,
+      stream,
+    )?,
+    ZeroCopyBuf::from(bytes.to_vec()),
+  ));
 }
 
 #[op]

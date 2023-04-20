@@ -354,10 +354,16 @@ pub fn ws_create_server_stream(
 pub fn op_ws_server_create(
   state: &mut OpState,
   conn: ResourceId,
+  extra_bytes: ZeroCopyBuf,
 ) -> Result<ResourceId, AnyError> {
   let network_stream =
     take_network_stream_resource(&mut state.resource_table, conn)?;
-  ws_create_server_stream(state, network_stream, Bytes::default())
+  // Copying the extra bytes, but unlikely this will account for much
+  ws_create_server_stream(
+    state,
+    network_stream,
+    Bytes::from(extra_bytes.to_vec()),
+  )
 }
 
 #[op]
