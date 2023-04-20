@@ -42,15 +42,6 @@ const {
 const _wantsUpgrade = Symbol("_wantsUpgrade");
 const _upgraded = Symbol("_upgraded");
 
-class RequestHeaders {
-  #slabId;
-
-  get(header) {
-    const value = core.ops.op_get_request_header(this.#slabId, header);
-    return value;
-  }
-}
-
 class InnerRequest {
   #slabId;
   #headers;
@@ -195,16 +186,6 @@ class InnerRequest {
       throw new TypeError("request closed");
     }
     return core.ops.op_get_request_headers(this.#slabId);
-  }
-
-  get headers() {
-    if (!this.#headers) {
-      if (this.#slabId === undefined) {
-        throw new TypeError("request closed");
-      }
-      this.#headers = new RequestHeaders(this.#slabId);
-    }
-    return this.#headers;
   }
 
   get slabId() {
