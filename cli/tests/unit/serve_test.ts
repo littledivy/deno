@@ -726,7 +726,10 @@ Deno.test({ permissions: { net: true } }, async function httpServerWebSocket() {
         response,
         socket,
       } = Deno.upgradeWebSocket(request);
-      socket.onerror = (e) => { console.error(e); fail(); }
+      socket.onerror = (e) => {
+        console.error(e);
+        fail();
+      };
       socket.onmessage = (m) => {
         socket.send(m.data);
         socket.close(1001);
@@ -743,7 +746,10 @@ Deno.test({ permissions: { net: true } }, async function httpServerWebSocket() {
   const def = deferred();
   const ws = new WebSocket("ws://localhost:4501");
   ws.onmessage = (m) => assertEquals(m.data, "foo");
-  ws.onerror = (e) => { console.error(e); fail(); }
+  ws.onerror = (e) => {
+    console.error(e);
+    fail();
+  };
   ws.onclose = () => def.resolve();
   ws.onopen = () => ws.send("foo");
 
@@ -763,7 +769,10 @@ Deno.test(
           response,
           socket,
         } = Deno.upgradeWebSocket(request);
-        socket.onerror = (e) => { console.error(e); fail(); }
+        socket.onerror = (e) => {
+          console.error(e);
+          fail();
+        };
         socket.onmessage = (m) => {
           socket.send(request.url.toString());
           socket.close(1001);
@@ -780,7 +789,10 @@ Deno.test(
     const def = deferred();
     const ws = new WebSocket("ws://localhost:4501");
     ws.onmessage = (m) => assertEquals(m.data, "http://localhost:4501/");
-    ws.onerror = (e) => { console.error(e); fail(); }
+    ws.onerror = (e) => {
+      console.error(e);
+      fail();
+    };
     ws.onclose = () => def.resolve();
     ws.onopen = () => ws.send("foo");
 
