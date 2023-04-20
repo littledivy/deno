@@ -319,46 +319,35 @@ pub fn op_read_request_body(state: &mut OpState, index: usize) -> ResourceId {
   res
 }
 
-fn header_value(s: &str) -> Option<HeaderValue> {
-  if s.is_ascii() {
-    return HeaderValue::from_bytes(s.as_bytes()).ok();
-  }
-
-  let mut bytes = Vec::with_capacity(s.len());
-  for c in s.chars() {
-    if c > char::from(255) {
-      return None;
-    }
-    bytes.push(c as u8);
-  }
-  HeaderValue::from_bytes(&bytes).ok()
-}
-
 #[op]
-pub fn op_set_response_header(index: usize, name: String, value: String) {
-  // TODO(mmastrac): Invalid headers should be handled?
+pub fn op_set_response_header(
+  index: usize,
+  name: ByteString,
+  value: ByteString,
+) {
   with_resp_mut(index, |resp| {
     let resp_headers = resp.as_mut().unwrap().headers_mut();
-    let name = HeaderName::from_bytes(name.as_bytes());
-    let value = header_value(&value);
-    if let (Ok(name), Some(value)) = (name, value) {
-      resp_headers.append(name, value);
-    }
+    // These are valid latin-1 strings
+    let name = HeaderName::from_bytes(&name).unwrap();
+    let value = HeaderValue::from_bytes(&value).unwrap();
+    resp_headers.append(name, value);
   });
 }
 
 #[op]
-pub fn op_set_response_headers(index: usize, headers: Vec<(String, String)>) {
+pub fn op_set_response_headers(
+  index: usize,
+  headers: Vec<(ByteString, ByteString)>,
+) {
   // TODO(mmastrac): Invalid headers should be handled?
   with_resp_mut(index, |resp| {
     let resp_headers = resp.as_mut().unwrap().headers_mut();
     resp_headers.reserve(headers.len());
     for (name, value) in headers {
-      let name = HeaderName::from_bytes(name.as_bytes());
-      let value = header_value(&value);
-      if let (Ok(name), Some(value)) = (name, value) {
-        resp_headers.append(name, value);
-      }
+      // These are valid latin-1 strings
+      let name = HeaderName::from_bytes(&name).unwrap();
+      let value = HeaderValue::from_bytes(&value).unwrap();
+      resp_headers.append(name, value);
     }
   })
 }
