@@ -142,6 +142,71 @@ Deno.test({ permissions: { net: true } }, async function httpServerBasic() {
   await server;
 });
 
+Deno.test({ permissions: { net: true } }, async function httpServerOnError() {
+  const ac = new AbortController();
+  const promise = deferred();
+  const listeningPromise = deferred();
+  let requestStash: Request | null;
+
+  const server = Deno.serve({
+    handler: async (request: Request) => {
+      requestStash = request;
+      await new Promise((r) => setTimeout(r, 100));
+      throw "fail";
+    },
+    port: 4501,
+    signal: ac.signal,
+    onListen: onListen(listeningPromise),
+    onError: () => {
+      return new Response("failed: " + requestStash!.url, { status: 500 });
+    },
+  });
+
+  await listeningPromise;
+  const resp = await fetch("http://127.0.0.1:4501/", {
+    headers: { "connection": "close" },
+  });
+  const text = await resp.text();
+  ac.abort();
+  await server;
+
+  assertEquals(text, "failed: http://127.0.0.1:4501/");
+});
+
+Deno.test(
+  { permissions: { net: true } },
+  async function httpServerOnErrorFails() {
+    const ac = new AbortController();
+    const promise = deferred();
+    const listeningPromise = deferred();
+    let requestStash: Request | null;
+
+    const server = Deno.serve({
+      handler: async (request: Request) => {
+        requestStash = request;
+        await new Promise((r) => setTimeout(r, 100));
+        throw "fail";
+      },
+      port: 4501,
+      signal: ac.signal,
+      onListen: onListen(listeningPromise),
+      onError: () => {
+        throw "again";
+      },
+    });
+
+    await listeningPromise;
+    const resp = await fetch("http://127.0.0.1:4501/", {
+      headers: { "connection": "close" },
+    });
+    const text = await resp.text();
+    ac.abort();
+    await server;
+
+    assertEquals(text, "Internal Server Error");
+  },
+);
+
 Deno.test({ permissions: { net: true } }, async function httpServerOverload1() {
   const ac = new AbortController();
   const promise = deferred();
@@ -321,6 +386,109 @@ Deno.test(
     ac.abort();
     await server;
   },
+);
+
+function createUrlTest(
+  name: string,
+  methodAndPath: string,
+  host: string | null,
+  expected: string,
+) {
+  Deno.test(`httpServerUrl${name}`, async () => {
+    const listeningPromise: Deferred<number> = deferred();
+    const urlPromise = deferred();
+    const ac = new AbortController();
+    const server = Deno.serve({
+      handler: async (request: Request) => {
+        urlPromise.resolve(request.url);
+        return new Response("");
+      },
+      port: 0,
+      signal: ac.signal,
+      onListen: ({ port }: { port: number }) => {
+        listeningPromise.resolve(port);
+      },
+      onError: createOnErrorCb(ac),
+    });
+
+    const port = await listeningPromise;
+    const conn = await Deno.connect({ port });
+
+    const encoder = new TextEncoder();
+    const body = `${methodAndPath} HTTP/1.1\r\n${
+      host ? ("Host: " + host + "\r\n") : ""
+    }Content-Length: 5\r\n\r\n12345`;
+    const writeResult = await conn.write(encoder.encode(body));
+    assertEquals(body.length, writeResult);
+
+    try {
+      const expectedResult = expected.replace("HOST", "localhost").replace(
+        "PORT",
+        `${port}`,
+      );
+      assertEquals(await urlPromise, expectedResult);
+    } finally {
+      ac.abort();
+      await server;
+      conn.close();
+    }
+  });
+}
+
+createUrlTest("WithPath", "GET /path", null, "http://HOST:PORT/path");
+createUrlTest(
+  "WithPathAndHost",
+  "GET /path",
+  "deno.land",
+  "http://deno.land/path",
+);
+createUrlTest(
+  "WithAbsolutePath",
+  "GET http://localhost/path",
+  null,
+  "http://localhost/path",
+);
+createUrlTest(
+  "WithAbsolutePathAndHost",
+  "GET http://localhost/path",
+  "deno.land",
+  "http://localhost/path",
+);
+createUrlTest(
+  "WithPortAbsolutePath",
+  "GET http://localhost:1234/path",
+  null,
+  "http://localhost:1234/path",
+);
+createUrlTest(
+  "WithPortAbsolutePathAndHost",
+  "GET http://localhost:1234/path",
+  "deno.land",
+  "http://localhost:1234/path",
+);
+createUrlTest(
+  "WithPortAbsolutePathAndHostWithPort",
+  "GET http://localhost:1234/path",
+  "deno.land:9999",
+  "http://localhost:1234/path",
+);
+
+createUrlTest("WithAsterisk", "OPTIONS *", null, "*");
+createUrlTest(
+  "WithAuthorityForm",
+  "CONNECT deno.land:80",
+  null,
+  "deno.land:80",
+);
+
+// TODO(mmastrac): These should probably be 400 errors
+createUrlTest("WithInvalidAsterisk", "GET *", null, "*");
+createUrlTest("WithInvalidNakedPath", "GET path", null, "path");
+createUrlTest(
+  "WithInvalidNakedAuthority",
+  "GET deno.land:1234",
+  null,
+  "deno.land:1234",
 );
 
 Deno.test(

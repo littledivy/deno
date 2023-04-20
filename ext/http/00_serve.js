@@ -5,7 +5,7 @@ const primordials = globalThis.__bootstrap.primordials;
 const { BadResourcePrototype } = core;
 import { InnerBody } from "ext:deno_fetch/22_body.js";
 import { Event } from "ext:deno_web/02_event.js";
-import { toInnerResponse } from "ext:deno_fetch/23_response.js";
+import { Response, toInnerResponse } from "ext:deno_fetch/23_response.js";
 import { fromInnerRequest } from "ext:deno_fetch/23_request.js";
 import { AbortController } from "ext:deno_web/03_abort_signal.js";
 import {
@@ -41,6 +41,10 @@ const {
 // Symbol we use to communicate to the rest of Deno that we handle upgrades ourselves
 const _wantsUpgrade = Symbol("_wantsUpgrade");
 const _upgraded = Symbol("_upgraded");
+
+const INTERNAL_SERVER_ERROR = new Response("Internal Server Error", {
+  status: 500,
+});
 
 class InnerRequest {
   #slabId;
@@ -291,55 +295,62 @@ async function asyncResponse(responseBodies, req, status, stream) {
  * Maps the incoming request slab ID to a fully-fledged Request object, passes it to the user-provided
  * callback, then extracts the response that was returned from that callback. The response is then pulled
  * apart and handled on the Rust side.
+ *
+ * This function returns a promise that will only reject in the case of abnormal exit.
  */
 function mapToCallback(responseBodies, context, signal, callback, onError) {
-  return function (req) {
+  return async function (req) {
     const innerRequest = new InnerRequest(req, context);
     const request = fromInnerRequest(innerRequest, signal, "immutable");
+
+    // Get the response from the user-provided callback. If that fails, use onError. If that fails, return a fallback
+    // 500 error.
     let response;
     try {
-      response = callback(request, { remoteAddr: innerRequest.remoteAddr });
+      response = await callback(request, {
+        remoteAddr: innerRequest.remoteAddr,
+      });
     } catch (error) {
-      response = onError(error);
-    }
-    return (async () => {
       try {
-        const inner = toInnerResponse(await response);
-        if (innerRequest[_upgraded]) {
-          // We're done here as the connection has been upgraded during the callback and no longer requires servicing.
-          return;
-        }
-
-        // Did everything shut down while we were waiting?
-        if (context.closed) {
-          innerRequest.close();
-          return;
-        }
-
-        const status = inner.status;
-        const headers = inner.headerList;
-        if (headers && headers.length > 0) {
-          if (headers.length == 1) {
-            core.ops.op_set_response_header(req, headers[0][0], headers[0][1]);
-          } else {
-            core.ops.op_set_response_headers(req, headers);
-          }
-        }
-
-        // Attempt to response quickly to this request, otherwise extract the stream
-        const stream = fastSyncResponseOrStream(req, inner.body);
-        if (stream !== null) {
-          // Handle the stream asynchronously
-          await asyncResponse(responseBodies, req, status, stream);
-        } else {
-          core.ops.op_set_promise_complete(req, status);
-        }
-
-        innerRequest.close();
-      } catch (e) {
-        onError(e);
+        response = await onError(error);
+      } catch (error) {
+        console.error("Exception in onError while handling exception", error);
+        response = INTERNAL_SERVER_ERROR;
       }
-    })();
+    }
+
+    const inner = toInnerResponse(response);
+    if (innerRequest[_upgraded]) {
+      // We're done here as the connection has been upgraded during the callback and no longer requires servicing.
+      return;
+    }
+
+    // Did everything shut down while we were waiting?
+    if (context.closed) {
+      innerRequest.close();
+      return;
+    }
+
+    const status = inner.status;
+    const headers = inner.headerList;
+    if (headers && headers.length > 0) {
+      if (headers.length == 1) {
+        core.ops.op_set_response_header(req, headers[0][0], headers[0][1]);
+      } else {
+        core.ops.op_set_response_headers(req, headers);
+      }
+    }
+
+    // Attempt to response quickly to this request, otherwise extract the stream
+    const stream = fastSyncResponseOrStream(req, inner.body);
+    if (stream !== null) {
+      // Handle the stream asynchronously
+      await asyncResponse(responseBodies, req, status, stream);
+    } else {
+      core.ops.op_set_promise_complete(req, status);
+    }
+
+    innerRequest.close();
   };
 }
 
@@ -373,7 +384,7 @@ async function serve(arg1, arg2) {
   const signal = options.signal;
   const onError = options.onError ?? function (error) {
     console.error(error);
-    return new Response("Internal Server Error", { status: 500 });
+    return INTERNAL_SERVER_ERROR;
   };
   const listenOpts = {
     hostname: options.hostname ?? "0.0.0.0",
@@ -458,7 +469,19 @@ async function serve(arg1, arg2) {
     if (req === 0xffffffff) {
       break;
     }
-    callback(req);
+    callback(req).catch((error) => {
+      // Abnormal exit
+      console.error(
+        "Terminating Deno.serve loop due to unexpected error",
+        error,
+      );
+      try {
+        context.closed = true;
+        core.tryClose(rid);
+      } catch {
+        // Pass
+      }
+    });
   }
 
   for (const streamRid of new SafeSetIterator(responseBodies)) {
