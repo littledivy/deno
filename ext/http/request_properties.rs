@@ -125,8 +125,14 @@ fn req_host_from_addr(
       if (stream_type == NetworkStreamType::Tls && addr.port() == 443)
         || (stream_type == NetworkStreamType::Tcp && addr.port() == 80)
       {
+        if addr.ip().is_loopback() || addr.ip().is_unspecified() {
+          return "localhost".to_owned();
+        }
         addr.ip().to_string()
       } else {
+        if addr.ip().is_loopback() || addr.ip().is_unspecified() {
+          return format!("localhost:{}", addr.port());
+        }
         addr.to_string()
       }
     }
@@ -167,6 +173,7 @@ fn req_host<'a>(
     return None;
   }
 
+  // It is rare that an authority will be passed, but if it does, it takes priority
   if let Some(auth) = uri.authority() {
     match addr_type {
       NetworkStreamType::Tcp => {
@@ -185,11 +192,7 @@ fn req_host<'a>(
     return Some(Cow::Borrowed(auth.as_str()));
   }
 
-  if let Some(host) = uri.host() {
-    return Some(Cow::Borrowed(host));
-  }
-
-  // Most requests will use this path
+  // TODO(mmastrac): Most requests will use this path and we probably will want to optimize it in the future
   if let Some(host) = headers.get(HOST) {
     return Some(match host.to_str() {
       Ok(host) => Cow::Borrowed(host),

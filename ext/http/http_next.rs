@@ -254,11 +254,17 @@ pub fn op_get_request_method_and_url(
       &http.request_parts.uri,
       &http.request_parts.headers,
     );
-    let value = &http.request_parts.uri;
+
+    // Only extract the path part - we handle authority elsewhere
+    let path = match &http.request_parts.uri.path_and_query() {
+      Some(path_and_query) => path_and_query.to_string(),
+      None => "".to_owned(),
+    };
+
     (
       http.request_parts.method.as_str().to_owned(),
       request_properties.authority,
-      value.to_string(),
+      path,
       String::from(http.request_info.peer_address.as_ref()),
       http.request_info.peer_port,
     )

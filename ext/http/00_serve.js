@@ -44,7 +44,6 @@ const _upgraded = Symbol("_upgraded");
 
 class InnerRequest {
   #slabId;
-  #headers;
   #context;
   #methodAndUri;
   #streamRid;
@@ -130,13 +129,36 @@ class InnerRequest {
       if (this.#slabId === undefined) {
         throw new TypeError("request closed");
       }
+      // TODO(mmastrac): This is quite slow as we're serializing a large number of values. We may want to consider
+      // splitting this up into multiple ops.
       this.#methodAndUri = core.ops.op_get_request_method_and_url(this.#slabId);
     }
-    if (this.#methodAndUri[1]) {
-      return this.#context.scheme + this.#methodAndUri[1] +
-        this.#methodAndUri[2];
+
+    const path = this.#methodAndUri[2];
+
+    // * is valid for OPTIONS
+    if (path === "*") {
+      return "*";
     }
-    return this.#context.scheme + this.#methodAndUri[2];
+
+    // If the path is empty, return the authority (valid for CONNECT)
+    if (path == "") {
+      return this.#methodAndUri[1];
+    }
+
+    // CONNECT requires an authority
+    if (this.#methodAndUri[0] == "CONNECT") {
+      return this.#methodAndUri[1];
+    }
+
+    const hostname = this.#methodAndUri[1];
+    if (hostname) {
+      // Construct a URL from the scheme, the hostname, and the path
+      return this.#context.scheme + hostname + path;
+    }
+
+    // Construct a URL from the scheme, the fallback hostname, and the path
+    return this.#context.scheme + this.#context.fallbackHost + path;
   }
 
   get remoteAddr() {
