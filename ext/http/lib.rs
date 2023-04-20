@@ -1172,7 +1172,7 @@ async fn op_http_upgrade_websocket(
   let (transport, bytes) =
     extract_network_stream(hyper::upgrade::on(request).await?);
   let ws_rid =
-    ws_create_server_stream(&mut *state.borrow_mut(), transport, bytes)?;
+    ws_create_server_stream(&mut state.borrow_mut(), transport, bytes)?;
   Ok(ws_rid)
 }
 

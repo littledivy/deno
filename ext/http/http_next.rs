@@ -1,5 +1,5 @@
-use crate::extract_network_stream;
 // Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
+use crate::extract_network_stream;
 use crate::request_body::HttpRequestBody;
 use crate::request_properties::DefaultHttpRequestProperties;
 use crate::request_properties::HttpConnectionProperties;
@@ -10,7 +10,6 @@ use crate::response_body::ResponseBytes;
 use crate::response_body::ResponseBytesInner;
 use crate::response_body::V8StreamHttpResponseBody;
 use crate::LocalExecutor;
-use deno_core::error::bad_resource;
 use deno_core::error::AnyError;
 use deno_core::futures::TryFutureExt;
 use deno_core::op;
@@ -224,7 +223,7 @@ pub async fn op_upgrade(
   // Stage 3: return the extracted raw network stream
   let (stream, bytes) = extract_network_stream(upgraded);
   // TODO(mmastrac): Handle these bytes
-  debug_assert!(bytes.len() == 0);
+  debug_assert!(bytes.is_empty());
   return put_network_stream_resource(
     &mut state.borrow_mut().resource_table,
     stream,
