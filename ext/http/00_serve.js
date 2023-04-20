@@ -25,7 +25,6 @@ import {
   getReadableStreamResourceBacking,
   readableStreamForRid,
   ReadableStreamPrototype,
-  writableStreamForRid,
 } from "ext:deno_web/06_streams.js";
 const {
   ObjectPrototypeIsPrototypeOf,
@@ -270,8 +269,6 @@ async function asyncResponse(responseBodies, req, status, stream) {
   const responseRid = core.ops.op_set_response_body_stream(req);
   SetPrototypeAdd(responseBodies, responseRid);
   const reader = stream.getReader();
-  const responseStream = writableStreamForRid(responseRid, true);
-  const writer = responseStream.getWriter();
   core.ops.op_set_promise_complete(req, status);
   try {
     while (true) {
@@ -279,16 +276,15 @@ async function asyncResponse(responseBodies, req, status, stream) {
       if (done) {
         break;
       }
-      await writer.write(value);
+      await core.writeAll(responseRid, value);
     }
   } catch (error) {
     await reader.cancel(error);
   } finally {
+    core.tryClose(responseRid);
     SetPrototypeDelete(responseBodies, responseRid);
-    writer.releaseLock();
     reader.releaseLock();
   }
-  responseStream.close();
 }
 
 /**
