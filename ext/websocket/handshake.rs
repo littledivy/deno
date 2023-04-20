@@ -21,6 +21,7 @@ use hyper::StatusCode;
 
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
+use tokio::task::spawn_local;
 
 use std::error::Error;
 
@@ -32,7 +33,7 @@ where
   S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
   let (mut sender, conn) = hyper::client::conn::handshake(socket).await?;
-  tokio::spawn(async move {
+  spawn_local(async move {
     if let Err(e) = conn.await {
       eprintln!("Error polling connection: {}", e);
     }
