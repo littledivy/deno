@@ -117,13 +117,21 @@ impl ResponseBytes {
 }
 
 impl ResponseBytesInner {
-  pub fn len(&self) -> Option<usize> {
+  pub fn size_hint(&self) -> SizeHint {
     match self {
-      Self::Done => Some(0),
-      Self::Empty => Some(0),
-      Self::Bytes(bytes) => Some(bytes.len()),
-      Self::Resource(..) => None,
-      Self::V8Stream(..) => None,
+      Self::Done => SizeHint::with_exact(0),
+      Self::Empty => SizeHint::with_exact(0),
+      Self::Bytes(bytes) => SizeHint::with_exact(bytes.len() as u64),
+      Self::Resource(_, res, _) => {
+        let hint = res.size_hint();
+        let mut size_hint = SizeHint::new();
+        size_hint.set_lower(hint.0);
+        if let Some(upper) = hint.1 {
+          size_hint.set_upper(upper)
+        }
+        size_hint
+      }
+      Self::V8Stream(..) => SizeHint::default(),
     }
   }
 }
@@ -185,11 +193,9 @@ impl Body for ResponseBytes {
   }
 
   fn size_hint(&self) -> SizeHint {
-    if let Some(size) = self.0.len() {
-      SizeHint::with_exact(size as u64)
-    } else {
-      SizeHint::default()
-    }
+    // The size hint currently only used in the case where it is exact bounds in hyper, but we'll pass it through
+    // anyways just in case hyper needs it.
+    self.0.size_hint()
   }
 }
 

@@ -11,6 +11,7 @@ use deno_core::RcRef;
 use deno_core::Resource;
 use hyper1::body::Body;
 use hyper1::body::Incoming;
+use hyper1::body::SizeHint;
 use std::borrow::Cow;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -42,11 +43,12 @@ impl Stream for ReadFuture {
   }
 }
 
-pub struct HttpRequestBody(AsyncRefCell<Peekable<ReadFuture>>);
+pub struct HttpRequestBody(AsyncRefCell<Peekable<ReadFuture>>, SizeHint);
 
 impl HttpRequestBody {
   pub fn new(body: Incoming) -> Self {
-    Self(AsyncRefCell::new(ReadFuture(body).peekable()))
+    let size_hint = body.size_hint();
+    Self(AsyncRefCell::new(ReadFuture(body).peekable()), size_hint)
   }
 
   async fn read(self: Rc<Self>, limit: usize) -> Result<BufView, AnyError> {
@@ -74,5 +76,9 @@ impl Resource for HttpRequestBody {
 
   fn read(self: Rc<Self>, limit: usize) -> AsyncResult<BufView> {
     Box::pin(HttpRequestBody::read(self, limit))
+  }
+
+  fn size_hint(&self) -> (u64, Option<u64>) {
+    (self.1.lower(), self.1.upper())
   }
 }
