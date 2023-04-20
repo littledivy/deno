@@ -270,10 +270,10 @@ pub fn put_network_stream_resource(
 /// This method will extract a stream from the resource table and return it, unwrapped.
 pub fn take_network_stream_listener_resource(
   resource_table: &mut ResourceTable,
-  stream_rid: ResourceId,
+  listener_rid: ResourceId,
 ) -> Result<NetworkStreamListener, AnyError> {
   if let Ok(resource_rc) =
-    resource_table.take::<TcpListenerResource>(stream_rid)
+    resource_table.take::<TcpListenerResource>(listener_rid)
   {
     let resource = Rc::try_unwrap(resource_rc)
       .map_err(|_| bad_resource("TCP socket listener is currently in use"))?;
@@ -281,7 +281,7 @@ pub fn take_network_stream_listener_resource(
   }
 
   if let Ok(resource_rc) =
-    resource_table.take::<TlsListenerResource>(stream_rid)
+    resource_table.take::<TlsListenerResource>(listener_rid)
   {
     let resource = Rc::try_unwrap(resource_rc)
       .map_err(|_| bad_resource("TLS socket listener is currently in use"))?;
@@ -293,7 +293,7 @@ pub fn take_network_stream_listener_resource(
 
   #[cfg(unix)]
   if let Ok(resource_rc) =
-    resource_table.take::<UnixListenerResource>(stream_rid)
+    resource_table.take::<UnixListenerResource>(listener_rid)
   {
     let resource = Rc::try_unwrap(resource_rc)
       .map_err(|_| bad_resource("UNIX socket listener is currently in use"))?;
