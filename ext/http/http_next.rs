@@ -233,12 +233,12 @@ pub async fn op_upgrade(
   ));
 }
 
-#[op]
-pub fn op_set_promise_complete(index: usize, status: u16) {
+#[op(fast)]
+pub fn op_set_promise_complete(index: usize, status: u32) {
   with_resp_mut(index, |resp| {
     // The Javascript code will never provide a status that is invalid here (see 23_response.js)
     *resp.as_mut().unwrap().status_mut() =
-      StatusCode::from_u16(status).unwrap();
+      StatusCode::from_u16(status as _).unwrap();
   });
   with_promise_mut(index, |promise| {
     promise.complete(true);
@@ -327,17 +327,13 @@ pub fn op_read_request_body(state: &mut OpState, index: usize) -> ResourceId {
   res
 }
 
-#[op]
-pub fn op_set_response_header(
-  index: usize,
-  name: ByteString,
-  value: ByteString,
-) {
+#[op(fast)]
+pub fn op_set_response_header(index: usize, name: &str, value: &str) {
   with_resp_mut(index, |resp| {
     let resp_headers = resp.as_mut().unwrap().headers_mut();
     // These are valid latin-1 strings
-    let name = HeaderName::from_bytes(&name).unwrap();
-    let value = HeaderValue::from_bytes(&value).unwrap();
+    let name = HeaderName::from_bytes(name.as_bytes()).unwrap();
+    let value = HeaderValue::from_bytes(value.as_bytes()).unwrap();
     resp_headers.append(name, value);
   });
 }
