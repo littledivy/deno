@@ -51,7 +51,6 @@ use fastwebsockets::Role;
 use fastwebsockets::WebSocket;
 
 pub use tokio_tungstenite; // Re-export tokio_tungstenite
-mod handshake;
 mod stream;
 
 #[derive(Clone)]
@@ -246,9 +245,10 @@ where
     _ => unreachable!(),
   };
 
-  let client = crate::handshake::client(request, socket);
+  let client =
+    fastwebsockets::handshake::client(&LocalExecutor, request, socket);
 
-  let (upgraded, response) = if let Some(cancel_resource) = cancel_resource {
+  let (ws, response) = if let Some(cancel_resource) = cancel_resource {
     client.or_cancel(cancel_resource.0.to_owned()).await?
   } else {
     client.await
@@ -259,6 +259,7 @@ where
     ))
   })?;
 
+  let upgraded = ws.into_inner();
   let Parts { io, read_buf, .. } =
     upgraded.downcast::<NetworkStream>().unwrap();
 
