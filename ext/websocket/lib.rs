@@ -28,6 +28,7 @@ use http::Method;
 use http::Request;
 use http::Uri;
 use hyper::upgrade::Parts;
+use hyper::upgrade::Upgraded;
 use hyper::Body;
 use serde::Deserialize;
 use serde::Serialize;
@@ -42,6 +43,7 @@ use std::rc::Rc;
 use tokio::net::TcpStream;
 use tokio_rustls::rustls::RootCertStore;
 use tokio_rustls::rustls::ServerName;
+use tokio_tungstenite::MaybeTlsStream;
 
 use fastwebsockets::CloseCode;
 use fastwebsockets::FragmentCollector;
@@ -222,8 +224,8 @@ where
   let addr = format!("{domain}:{port}");
   let tcp_socket = TcpStream::connect(addr).await?;
 
-  let socket: NetworkStream = match uri.scheme_str() {
-    Some("ws") => NetworkStream::Tcp(tcp_socket),
+  let socket = match uri.scheme_str() {
+    Some("ws") => MaybeTlsStream::Plain(tcp_socket),
     Some("wss") => {
       let mut tls_config = create_client_config(
         root_cert_store,
@@ -231,16 +233,12 @@ where
         unsafely_ignore_certificate_errors,
         None,
       )?;
-      // Send http/1.1 for ALPN
-      // https://chromestatus.com/feature/5687059162333184
-      tls_config.alpn_protocols =
-        vec![vec![104, 116, 116, 112, 47, 49, 46, 49]];
+      let tls_connector =
+        tokio_rustls::TlsConnector::from(std::sync::Arc::new(tls_config));
       let server_name = ServerName::try_from(domain.as_str())
         .map_err(|_| invalid_hostname(domain))?;
-      let mut stream =
-        TlsStream::new_client_side(tcp_socket, tls_config.into(), server_name);
-      stream.handshake().await?;
-      NetworkStream::Tls(stream)
+      let tls_stream = tls_connector.connect(server_name, tcp_socket).await?;
+      MaybeTlsStream::Rustls(tls_stream)
     }
     _ => unreachable!(),
   };
@@ -248,7 +246,7 @@ where
   let client =
     fastwebsockets::handshake::client(&LocalExecutor, request, socket);
 
-  let (ws, response) = if let Some(cancel_resource) = cancel_resource {
+  let (stream, response) = if let Some(cancel_resource) = cancel_resource {
     client.or_cancel(cancel_resource.0.to_owned()).await?
   } else {
     client.await
@@ -259,12 +257,12 @@ where
     ))
   })?;
 
-  let upgraded = ws.into_inner();
-  let Parts { io, read_buf, .. } =
-    upgraded.downcast::<NetworkStream>().unwrap();
+  // let upgraded = ws.into_inner();
+  // let Parts { io, read_buf, .. } =
+  //   upgraded.downcast::<NetworkStream>().unwrap();
 
-  let stream = WebSocketStream::new(io, Some(read_buf));
-  let stream = WebSocket::after_handshake(stream, Role::Client);
+  // let stream = WebSocketStream::new(io, Some(read_buf));
+  // let stream = WebSocket::after_handshake(stream, Role::Client);
 
   if let Some(cancel_rid) = cancel_handle {
     state.borrow_mut().resource_table.close(cancel_rid).ok();
@@ -305,7 +303,7 @@ pub enum MessageKind {
 }
 
 pub struct ServerWebSocket {
-  ws: AsyncRefCell<FragmentCollector<WebSocketStream>>,
+  ws: AsyncRefCell<FragmentCollector<Upgraded>>,
   closed: Rc<Cell<bool>>,
 }
 
@@ -337,21 +335,21 @@ pub fn ws_create_server_stream(
   transport: NetworkStream,
   read_buf: Bytes,
 ) -> Result<ResourceId, AnyError> {
-  let mut ws = WebSocket::after_handshake(
-    WebSocketStream::new(transport, Some(read_buf)),
-    Role::Server,
-  );
-  ws.set_writev(true);
-  ws.set_auto_close(true);
-  ws.set_auto_pong(true);
+  // let mut ws = WebSocket::after_handshake(
+  //   WebSocketStream::new(transport, Some(read_buf)),
+  //   Role::Server,
+  // );
+  // ws.set_writev(true);
+  // ws.set_auto_close(true);
+  // ws.set_auto_pong(true);
 
-  let ws_resource = ServerWebSocket {
-    ws: AsyncRefCell::new(FragmentCollector::new(ws)),
-    closed: Rc::new(Cell::new(false)),
-  };
+  // let ws_resource = ServerWebSocket {
+  //   ws: AsyncRefCell::new(FragmentCollector::new(ws)),
+  //   closed: Rc::new(Cell::new(false)),
+  // };
 
-  let rid = state.resource_table.add(ws_resource);
-  Ok(rid)
+  // let rid = state.resource_table.add(ws_resource);
+  Ok(0)
 }
 
 #[op]
