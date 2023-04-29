@@ -227,12 +227,12 @@
     return res;
   }
 
-  function opAsync2(name, arg0, arg1) {
+  function opAsyncDispatch(name, callback) {
     const id = nextPromiseId++;
     let promise = PromisePrototypeThen(setPromise(id), unwrapOpResult);
     let maybeResult;
     try {
-      maybeResult = ops[name](id, arg0, arg1);
+      maybeResult = callback(id);
     } catch (err) {
       // Cleanup the just-created promise
       getPromise(id);
@@ -252,29 +252,12 @@
     return promise;
   }
 
-  function opAsync(name, ...args) {
-    const id = nextPromiseId++;
-    let promise = PromisePrototypeThen(setPromise(id), unwrapOpResult);
-    let maybeResult;
-    try {
-      maybeResult = ops[name](id, ...new SafeArrayIterator(args));
-    } catch (err) {
-      // Cleanup the just-created promise
-      getPromise(id);
-      if (!ReflectHas(ops, name)) {
-        throw new TypeError(`${name} is not a registered op`);
-      }
-      // Rethrow the error
-      throw err;
-    }
-    promise = handleOpCallTracing(name, id, promise);
-    promise[promiseIdSymbol] = id;
-    if (typeof maybeResult !== "undefined") {
-      const promise = getPromise(id);
-      promise.resolve(maybeResult);
-    }
+  function opAsync2(name, arg0, arg1) {
+    return opAsyncDispatch(name, (id) => ops[name](id, arg0, arg1));
+  }
 
-    return promise;
+  function opAsync(name, ...args) {
+    return opAsyncDispatch(name, (id) => ops[name](id, ...args));
   }
 
   function handleOpCallTracing(opName, promiseId, p) {
@@ -409,20 +392,20 @@
       // function that creates a wrapper is to minimize the number of objects
       // captured in the closure.
       function create2xHookWrapper(hook1, hook2) {
-        return function (promise, parent) {
+        return function(promise, parent) {
           hook1(promise, parent);
           hook2(promise, parent);
         };
       }
       function create3xHookWrapper(hook1, hook2, hook3) {
-        return function (promise, parent) {
+        return function(promise, parent) {
           hook1(promise, parent);
           hook2(promise, parent);
           hook3(promise, parent);
         };
       }
       function createHookListWrapper(hooks) {
-        return function (promise, parent) {
+        return function(promise, parent) {
           for (let i = 0; i < hooks.length; i++) {
             const hook = hooks[i];
             hook(promise, parent);
@@ -443,6 +426,7 @@
   const core = ObjectAssign(globalThis.Deno.core, {
     opAsync,
     opAsync2,
+    opAsyncDispatch,
     resources,
     metrics,
     registerErrorBuilder,

@@ -3,7 +3,7 @@
 /// <reference path="../../core/internal.d.ts" />
 
 const core = globalThis.Deno.core;
-const { opAsync, opAsync2 } = core;
+const { opAsync, opAsync2, opAsyncDispatch, ops } = core;
 // deno-lint-ignore camelcase
 const op_ws_check_permission_and_cancel_handle =
   core.ops.op_ws_check_permission_and_cancel_handle;
@@ -225,11 +225,11 @@ class WebSocket extends EventTarget {
 
     if (
       protocols.length !==
-        SetPrototypeGetSize(
-          new SafeSet(
-            ArrayPrototypeMap(protocols, (p) => StringPrototypeToLowerCase(p)),
-          ),
-        )
+      SetPrototypeGetSize(
+        new SafeSet(
+          ArrayPrototypeMap(protocols, (p) => StringPrototypeToLowerCase(p)),
+        ),
+      )
     ) {
       throw new DOMException(
         "Can't supply multiple times the same protocol.",
@@ -437,10 +437,11 @@ class WebSocket extends EventTarget {
   }
 
   async [_eventLoop]() {
+    const dispatch = (id) => ops.op_ws_next_event(id, this[_rid]);
     while (this[_readyState] !== CLOSED) {
-      const { 0: kind, 1: value } = await opAsync2(
+      const { 0: kind, 1: value } = await opAsyncDispatch(
         "op_ws_next_event",
-        this[_rid],
+        dispatch,
       );
 
       switch (kind) {
@@ -567,16 +568,15 @@ class WebSocket extends EventTarget {
   }
 
   [SymbolFor("Deno.customInspect")](inspect) {
-    return `${this.constructor.name} ${
-      inspect({
-        url: this.url,
-        readyState: this.readyState,
-        extensions: this.extensions,
-        protocol: this.protocol,
-        binaryType: this.binaryType,
-        bufferedAmount: this.bufferedAmount,
-      })
-    }`;
+    return `${this.constructor.name} ${inspect({
+      url: this.url,
+      readyState: this.readyState,
+      extensions: this.extensions,
+      protocol: this.protocol,
+      binaryType: this.binaryType,
+      bufferedAmount: this.bufferedAmount,
+    })
+      }`;
   }
 }
 
