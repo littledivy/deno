@@ -371,19 +371,20 @@ pub fn op_ws_server_create(
   )
 }
 
-#[op]
-pub async fn op_ws_send_binary(
-  state: Rc<RefCell<OpState>>,
+#[op(fast)]
+pub fn op_ws_send_binary(
+  state: &mut OpState,
   rid: ResourceId,
-  data: ZeroCopyBuf,
+  data: &[u8],
 ) -> Result<(), AnyError> {
-  let resource = state
-    .borrow_mut()
-    .resource_table
-    .get::<ServerWebSocket>(rid)?;
-  resource
-    .write_frame(Frame::new(true, OpCode::Binary, None, data.to_vec()))
-    .await
+  let resource = state.resource_table.get::<ServerWebSocket>(rid)?;
+  let data = data.to_vec();
+  tokio::task::spawn_local(async move {
+    resource
+      .write_frame(Frame::new(true, OpCode::Binary, None, data))
+      .await
+  });
+  Ok(())
 }
 
 #[op]

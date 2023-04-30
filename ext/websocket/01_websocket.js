@@ -3,7 +3,7 @@
 /// <reference path="../../core/internal.d.ts" />
 
 const core = globalThis.Deno.core;
-const { opAsync, opAsync2 } = core;
+const { opAsync, opAsync2, ops } = core;
 // deno-lint-ignore camelcase
 const op_ws_check_permission_and_cancel_handle =
   core.ops.op_ws_check_permission_and_cancel_handle;
@@ -318,17 +318,18 @@ class WebSocket extends EventTarget {
      * @param {number} byteLength
      */
     const sendTypedArray = (view, byteLength) => {
-      this[_bufferedAmount] += byteLength;
-      PromisePrototypeThen(
-        opAsync2(
-          "op_ws_send_binary",
-          this[_rid],
-          view,
-        ),
-        () => {
-          this[_bufferedAmount] -= byteLength;
-        },
-      );
+      // this[_bufferedAmount] += byteLength;
+      // PromisePrototypeThen(
+      //   opAsync2(
+      //     "op_ws_send_binary",
+      //     this[_rid],
+      //     view,
+      //   ),
+      //   () => {
+      //     this[_bufferedAmount] -= byteLength;
+      //   },
+      // );
+      ops.op_ws_send_binary(this[_rid], view);
     };
 
     if (ObjectPrototypeIsPrototypeOf(BlobPrototype, data)) {
