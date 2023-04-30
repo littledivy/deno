@@ -16,6 +16,7 @@ import {
   _skipInternalInit,
   CloseEvent,
   defineEventHandler,
+  dispatch,
   ErrorEvent,
   Event,
   EventTarget,
@@ -226,11 +227,11 @@ class WebSocket extends EventTarget {
 
     if (
       protocols.length !==
-      SetPrototypeGetSize(
-        new SafeSet(
-          ArrayPrototypeMap(protocols, (p) => StringPrototypeToLowerCase(p)),
-        ),
-      )
+        SetPrototypeGetSize(
+          new SafeSet(
+            ArrayPrototypeMap(protocols, (p) => StringPrototypeToLowerCase(p)),
+          ),
+        )
     ) {
       throw new DOMException(
         "Can't supply multiple times the same protocol.",
@@ -317,7 +318,7 @@ class WebSocket extends EventTarget {
      * @param {ArrayBufferView} view
      * @param {number} byteLength
      */
-    const sendTypedArray = (view, byteLength) => {
+    const sendTypedArray = (view) => {
       // this[_bufferedAmount] += byteLength;
       // PromisePrototypeThen(
       //   opAsync2(
@@ -332,25 +333,24 @@ class WebSocket extends EventTarget {
       ops.op_ws_send_binary(this[_rid], view);
     };
 
-    if (ObjectPrototypeIsPrototypeOf(BlobPrototype, data)) {
+    if (ObjectPrototypeIsPrototypeOf(ArrayBufferPrototype, data)) {
+      sendTypedArray(data);
+    } else if (ObjectPrototypeIsPrototypeOf(BlobPrototype, data)) {
       PromisePrototypeThen(
         data.slice().arrayBuffer(),
         (ab) =>
           sendTypedArray(
             new DataView(ab),
-            ArrayBufferPrototypeGetByteLength(ab),
           ),
       );
     } else if (ArrayBufferIsView(data)) {
       if (TypedArrayPrototypeGetSymbolToStringTag(data) === undefined) {
         // DataView
-        sendTypedArray(data, DataViewPrototypeGetByteLength(data));
+        sendTypedArray(data);
       } else {
         // TypedArray
-        sendTypedArray(data, TypedArrayPrototypeGetByteLength(data));
+        sendTypedArray(data);
       }
-    } else if (ObjectPrototypeIsPrototypeOf(ArrayBufferPrototype, data)) {
-      sendTypedArray(data, ArrayBufferPrototypeGetByteLength(data));
     } else {
       const string = String(data);
       const d = core.encode(string);
@@ -451,7 +451,7 @@ class WebSocket extends EventTarget {
                 data: value,
                 origin: this[_url],
               });
-              this.dispatchEvent(event);
+              dispatch(this, event);
               break;
             }
             case 1: {
@@ -470,7 +470,7 @@ class WebSocket extends EventTarget {
                 origin: this[_url],
                 [_skipInternalInit]: true,
               });
-              this.dispatchEvent(event);
+              dispatch(this, event);
               break;
             }
             case 2: {
@@ -523,7 +523,7 @@ class WebSocket extends EventTarget {
             }
           }
         }
-      }
+      },
     );
   }
 
@@ -569,15 +569,16 @@ class WebSocket extends EventTarget {
   }
 
   [SymbolFor("Deno.customInspect")](inspect) {
-    return `${this.constructor.name} ${inspect({
-      url: this.url,
-      readyState: this.readyState,
-      extensions: this.extensions,
-      protocol: this.protocol,
-      binaryType: this.binaryType,
-      bufferedAmount: this.bufferedAmount,
-    })
-      }`;
+    return `${this.constructor.name} ${
+      inspect({
+        url: this.url,
+        readyState: this.readyState,
+        extensions: this.extensions,
+        protocol: this.protocol,
+        binaryType: this.binaryType,
+        bufferedAmount: this.bufferedAmount,
+      })
+    }`;
   }
 }
 
