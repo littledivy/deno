@@ -7,6 +7,7 @@ const { opAsync, opAsync2 } = core;
 // deno-lint-ignore camelcase
 const op_ws_check_permission_and_cancel_handle =
   core.ops.op_ws_check_permission_and_cancel_handle;
+const op_ws_next_event = core.ops.op_ws_next_event;
 import { URL } from "ext:deno_url/00_url.js";
 import * as webidl from "ext:deno_webidl/00_webidl.js";
 import { HTTP_TOKEN_CODE_POINT_RE } from "ext:deno_web/00_infra.js";
@@ -225,11 +226,11 @@ class WebSocket extends EventTarget {
 
     if (
       protocols.length !==
-        SetPrototypeGetSize(
-          new SafeSet(
-            ArrayPrototypeMap(protocols, (p) => StringPrototypeToLowerCase(p)),
-          ),
-        )
+      SetPrototypeGetSize(
+        new SafeSet(
+          ArrayPrototypeMap(protocols, (p) => StringPrototypeToLowerCase(p)),
+        ),
+      )
     ) {
       throw new DOMException(
         "Can't supply multiple times the same protocol.",
@@ -437,92 +438,92 @@ class WebSocket extends EventTarget {
   }
 
   async [_eventLoop]() {
-    while (this[_readyState] !== CLOSED) {
-      const { 0: kind, 1: value } = await opAsync2(
-        "op_ws_next_event",
-        this[_rid],
-      );
+    op_ws_next_event(
+      this[_rid],
+      (kind, value) => {
+        if (this[_readyState] !== CLOSED) {
+          switch (kind) {
+            case 0: {
+              /* string */
+              this[_serverHandleIdleTimeout]();
+              const event = new MessageEvent("message", {
+                data: value,
+                origin: this[_url],
+              });
+              this.dispatchEvent(event);
+              break;
+            }
+            case 1: {
+              /* binary */
+              this[_serverHandleIdleTimeout]();
+              let data;
 
-      switch (kind) {
-        case 0: {
-          /* string */
-          this[_serverHandleIdleTimeout]();
-          const event = new MessageEvent("message", {
-            data: value,
-            origin: this[_url],
-          });
-          this.dispatchEvent(event);
-          break;
-        }
-        case 1: {
-          /* binary */
-          this[_serverHandleIdleTimeout]();
-          let data;
+              if (this.binaryType === "blob") {
+                data = new Blob([value]);
+              } else {
+                data = value;
+              }
 
-          if (this.binaryType === "blob") {
-            data = new Blob([value]);
-          } else {
-            data = value;
-          }
+              const event = new MessageEvent("message", {
+                data,
+                origin: this[_url],
+                [_skipInternalInit]: true,
+              });
+              this.dispatchEvent(event);
+              break;
+            }
+            case 2: {
+              /* pong */
+              this[_serverHandleIdleTimeout]();
+              break;
+            }
+            case 3: {
+              /* error */
+              this[_readyState] = CLOSED;
 
-          const event = new MessageEvent("message", {
-            data,
-            origin: this[_url],
-            [_skipInternalInit]: true,
-          });
-          this.dispatchEvent(event);
-          break;
-        }
-        case 2: {
-          /* pong */
-          this[_serverHandleIdleTimeout]();
-          break;
-        }
-        case 3: {
-          /* error */
-          this[_readyState] = CLOSED;
+              const errorEv = new ErrorEvent("error", {
+                message: value,
+              });
+              this.dispatchEvent(errorEv);
 
-          const errorEv = new ErrorEvent("error", {
-            message: value,
-          });
-          this.dispatchEvent(errorEv);
+              const closeEv = new CloseEvent("close");
+              this.dispatchEvent(closeEv);
+              core.tryClose(this[_rid]);
+              break;
+            }
+            default: {
+              /* close */
+              const code = kind;
+              const prevState = this[_readyState];
+              this[_readyState] = CLOSED;
+              clearTimeout(this[_idleTimeoutTimeout]);
 
-          const closeEv = new CloseEvent("close");
-          this.dispatchEvent(closeEv);
-          core.tryClose(this[_rid]);
-          break;
-        }
-        default: {
-          /* close */
-          const code = kind;
-          const prevState = this[_readyState];
-          this[_readyState] = CLOSED;
-          clearTimeout(this[_idleTimeoutTimeout]);
+              if (prevState === OPEN) {
+                try {
+                  // await opAsync(
+                  //   "op_ws_close",
+                  //   this[_rid],
+                  //   code,
+                  //   value,
+                  // );
+                } catch {
+                  // ignore failures
+                }
+              }
 
-          if (prevState === OPEN) {
-            try {
-              await opAsync(
-                "op_ws_close",
-                this[_rid],
-                code,
-                value,
-              );
-            } catch {
-              // ignore failures
+              const event = new CloseEvent("close", {
+                wasClean: true,
+                code: code,
+                reason: value,
+              });
+              this.dispatchEvent(event);
+              core.tryClose(this[_rid]);
+              break;
             }
           }
-
-          const event = new CloseEvent("close", {
-            wasClean: true,
-            code: code,
-            reason: value,
-          });
-          this.dispatchEvent(event);
-          core.tryClose(this[_rid]);
-          break;
         }
       }
-    }
+    );
   }
 
   [_serverHandleIdleTimeout]() {
@@ -567,16 +568,15 @@ class WebSocket extends EventTarget {
   }
 
   [SymbolFor("Deno.customInspect")](inspect) {
-    return `${this.constructor.name} ${
-      inspect({
-        url: this.url,
-        readyState: this.readyState,
-        extensions: this.extensions,
-        protocol: this.protocol,
-        binaryType: this.binaryType,
-        bufferedAmount: this.bufferedAmount,
-      })
-    }`;
+    return `${this.constructor.name} ${inspect({
+      url: this.url,
+      readyState: this.readyState,
+      extensions: this.extensions,
+      protocol: this.protocol,
+      binaryType: this.binaryType,
+      bufferedAmount: this.bufferedAmount,
+    })
+      }`;
   }
 }
 
