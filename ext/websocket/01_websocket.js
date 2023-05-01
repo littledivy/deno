@@ -227,11 +227,11 @@ class WebSocket extends EventTarget {
 
     if (
       protocols.length !==
-        SetPrototypeGetSize(
-          new SafeSet(
-            ArrayPrototypeMap(protocols, (p) => StringPrototypeToLowerCase(p)),
-          ),
-        )
+      SetPrototypeGetSize(
+        new SafeSet(
+          ArrayPrototypeMap(protocols, (p) => StringPrototypeToLowerCase(p)),
+        ),
+      )
     ) {
       throw new DOMException(
         "Can't supply multiple times the same protocol.",
@@ -336,7 +336,7 @@ class WebSocket extends EventTarget {
     };
 
     if (ObjectPrototypeIsPrototypeOf(ArrayBufferPrototype, data)) {
-      sendTypedArray(data);
+      sendTypedArray(new Uint8Array(data));
     } else if (ObjectPrototypeIsPrototypeOf(BlobPrototype, data)) {
       PromisePrototypeThen(
         data.slice().arrayBuffer(),
@@ -571,16 +571,15 @@ class WebSocket extends EventTarget {
   }
 
   [SymbolFor("Deno.customInspect")](inspect) {
-    return `${this.constructor.name} ${
-      inspect({
-        url: this.url,
-        readyState: this.readyState,
-        extensions: this.extensions,
-        protocol: this.protocol,
-        binaryType: this.binaryType,
-        bufferedAmount: this.bufferedAmount,
-      })
-    }`;
+    return `${this.constructor.name} ${inspect({
+      url: this.url,
+      readyState: this.readyState,
+      extensions: this.extensions,
+      protocol: this.protocol,
+      binaryType: this.binaryType,
+      bufferedAmount: this.bufferedAmount,
+    })
+      }`;
   }
 }
 
