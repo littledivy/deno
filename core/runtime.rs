@@ -2350,6 +2350,10 @@ impl JsRuntime {
       }
     }
 
+    if args.is_empty() {
+      return Ok(());
+    }
+
     let has_tick_scheduled =
       v8::Boolean::new(scope, self.state.borrow().has_tick_scheduled);
     args.push(has_tick_scheduled.into());
