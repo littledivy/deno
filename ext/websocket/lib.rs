@@ -322,6 +322,15 @@ impl ServerWebSocket {
       .map_err(|err| type_error(err.to_string()))?;
     Ok(())
   }
+
+  #[inline]
+  pub fn try_write_frame(self: Rc<Self>, frame: Frame) -> bool {
+    // SAFETY: fastwebsockets only needs a mutable reference to the WebSocket
+    // to populate the write buffer. We encounter an await point when writing
+    // to the socket after the frame has already been written to the buffer.
+    let ws = unsafe { &mut *self.ws.as_ptr() };
+    ws.try_write_frame(frame, |stream, data| stream.try_write(data).unwrap())
+  }
 }
 
 impl Resource for ServerWebSocket {
@@ -369,6 +378,21 @@ pub fn op_ws_server_create(
     network_stream,
     Bytes::from(extra_bytes.to_vec()),
   )
+}
+
+#[op(fast)]
+pub fn op_ws_try_send_binary(
+  state: &mut OpState,
+  rid: u32,
+  data: &[u8],
+) -> Result<bool, AnyError> {
+  let resource = state.resource_table.get::<ServerWebSocket>(rid)?;
+  Ok(resource.try_write_frame(Frame::new(
+    true,
+    OpCode::Binary,
+    None,
+    data.to_vec(),
+  )))
 }
 
 #[op(fast)]
@@ -537,6 +561,7 @@ deno_core::extension!(deno_websocket,
     op_ws_send_ping,
     op_ws_send_pong,
     op_ws_server_create,
+    op_ws_try_send_binary,
   ],
   esm = [ "01_websocket.js", "02_websocketstream.js" ],
   options = {

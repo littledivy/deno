@@ -3,6 +3,7 @@ use bytes::Buf;
 use bytes::Bytes;
 use deno_net::raw::NetworkStream;
 use hyper::upgrade::Upgraded;
+use std::io::Error;
 use std::pin::Pin;
 use std::task::Poll;
 use tokio::io::AsyncRead;
@@ -25,6 +26,17 @@ impl WebSocketStream {
     Self {
       stream,
       pre: buffer,
+    }
+  }
+
+  pub fn try_write(&mut self, buf: &[u8]) -> Option<Result<usize, Error>> {
+    match &mut self.stream {
+      WsStreamKind::Network(stream) => match stream {
+        NetworkStream::Tcp(tcp) => Some(tcp.try_write(buf)),
+        // TODO(@littledivy): Is there try_write on other streams?
+        _ => None,
+      },
+      WsStreamKind::Upgraded(stream) => None,
     }
   }
 }

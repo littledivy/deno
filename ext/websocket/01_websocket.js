@@ -330,7 +330,9 @@ class WebSocket extends EventTarget {
       //     this[_bufferedAmount] -= byteLength;
       //   },
       // );
-      ops.op_ws_send_binary(this[_rid], view);
+      if (!ops.op_ws_try_send_binary(this[_rid], view)) {
+        ops.op_ws_send_binary(this[_rid], view);
+      }
     };
 
     if (ObjectPrototypeIsPrototypeOf(ArrayBufferPrototype, data)) {
