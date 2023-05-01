@@ -1085,13 +1085,13 @@ impl JsRuntime {
 
   fn pump_v8_message_loop(&mut self) -> Result<(), Error> {
     let scope = &mut self.handle_scope();
-    while v8::Platform::pump_message_loop(
-      &v8::V8::get_current_platform(),
-      scope,
-      false, // don't block if there are no tasks
-    ) {
-      // do nothing
-    }
+    // while v8::Platform::pump_message_loop(
+    //   &v8::V8::get_current_platform(),
+    //   scope,
+    //   false, // don't block if there are no tasks
+    // ) {
+    //   // do nothing
+    // }
 
     let tc_scope = &mut v8::TryCatch::new(scope);
     tc_scope.perform_microtask_checkpoint();
