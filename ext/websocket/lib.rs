@@ -374,7 +374,7 @@ pub fn op_ws_server_create(
 #[op(fast)]
 pub fn op_ws_send_binary(
   state: &mut OpState,
-  rid: ResourceId,
+  rid: u32,
   data: &[u8],
 ) -> Result<(), AnyError> {
   let resource = state.resource_table.get::<ServerWebSocket>(rid)?;
