@@ -342,7 +342,7 @@ pub fn ws_create_server_stream(
     ),
     Role::Server,
   );
-  ws.set_writev(true);
+  ws.set_writev(false);
   ws.set_auto_close(true);
   ws.set_auto_pong(true);
 
