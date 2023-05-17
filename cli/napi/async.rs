@@ -61,8 +61,6 @@ fn napi_queue_async_work(env_ptr: *mut Env, work: napi_async_work) -> Result {
   Ok(())
 }
 
-// TODO: Custom async operations.
-
 #[napi_sym::napi_sym]
 fn napi_async_init(
   _env: *mut Env,
@@ -70,10 +68,10 @@ fn napi_async_init(
   _async_resource_name: napi_value,
   _result: *mut *mut (),
 ) -> Result {
-  todo!()
+  Ok(())
 }
 
 #[napi_sym::napi_sym]
 fn napi_async_destroy(_env: *mut Env, _async_context: *mut ()) -> Result {
-  todo!()
+  Ok(())
 }
