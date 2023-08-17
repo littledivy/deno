@@ -134,6 +134,20 @@ class URLPattern {
       baseURL = webidl.converters.USVString(baseURL, prefix, "Argument 2");
     }
 
+    // Fast path, if input is not string.
+    if (typeof input !== "string") {
+      const url = input;
+      // Order in terms of usage in real-world
+      const keys = ObjectKeys(url);
+      for (let i = 0; i < keys.length; ++i) {
+        const key = keys[i];
+        if (!RegExpPrototypeTest(this[_components][key].regexp, url[key])) {
+        return false;
+      }
+    }
+     return true;
+    }
+
     const res = ops.op_urlpattern_process_match_input(
       input,
       baseURL,
@@ -169,6 +183,33 @@ class URLPattern {
       baseURL = webidl.converters.USVString(baseURL, prefix, "Argument 2");
     }
 
+    if (typeof input == "string") {
+	
+    const result = { inputs: null };
+	const values = new URL(input);
+      const keys = ["pathname"];
+      for (let i = 0; i < keys.length; ++i) {
+        const key = keys[i];
+      const component = this[_components][key];
+      const input = values[key];
+      const match = RegExpPrototypeExec(component.regexp, input);
+      if (match === null) {
+        return null;
+      }
+
+      const groupEntries = ArrayPrototypeMap(
+        component.groupNameList,
+        (name, i) => [name, match[i + 1] ?? ""],
+      );
+      const groups = ObjectFromEntries(groupEntries);
+      result[key] = {
+        input,
+        groups,
+      };
+    }
+     return result;
+    }
+
     const res = ops.op_urlpattern_process_match_input(
       input,
       baseURL,
@@ -195,6 +236,7 @@ class URLPattern {
       if (match === null) {
         return null;
       }
+
       const groupEntries = ArrayPrototypeMap(
         component.groupNameList,
         (name, i) => [name, match[i + 1] ?? ""],

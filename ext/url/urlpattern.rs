@@ -26,6 +26,25 @@ pub fn op_urlpattern_parse(
   Ok(pattern)
 }
 
+#[repr(u8)]
+enum MatchInputKey {
+    Protocol,
+    Username,
+    Password,
+    Hostname,
+    Port,
+    Pathname,
+    Search,
+    Hash,
+}
+
+#[op2]
+pub fn op_urlpattern_process_match_input1(
+  #[string] input: &str,
+) -> Result<(), AnyError> {
+  
+}
+
 #[op]
 pub fn op_urlpattern_process_match_input(
   input: StringOrInit,
