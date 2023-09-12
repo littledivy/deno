@@ -107,6 +107,10 @@ class TextDecoder {
       stream = options.stream;
     }
 
+    if (!stream && this.#rid === null) {
+      return input.utf8String();
+    }
+
     try {
       /** @type {ArrayBufferLike} */
       let buffer = input;
@@ -164,6 +168,7 @@ class TextDecoder {
       if (!stream && this.#rid === null) {
         // Fast path for utf8 single pass encoding.
         if (this.#utf8SinglePass) {
+          // return input.utf8String();
           return ops.op_encoding_decode_utf8(input, this.#ignoreBOM);
         }
 
