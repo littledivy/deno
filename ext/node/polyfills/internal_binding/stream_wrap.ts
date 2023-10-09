@@ -324,6 +324,8 @@ export class LibuvStreamWrap extends HandleWrap {
         return this.#read();
       }
 
+      console.log(e);
+
       if (
         e instanceof Deno.errors.Interrupted ||
         e instanceof Deno.errors.BadResource

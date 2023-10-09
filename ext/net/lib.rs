@@ -64,6 +64,7 @@ deno_core::extension!(deno_net,
   ops = [
     ops::op_net_accept_tcp,
     ops::op_net_connect_tcp<P>,
+    ops::op_net_open_tcp,
     ops::op_net_listen_tcp<P>,
     ops::op_net_listen_udp<P>,
     ops::op_node_unstable_net_listen_udp<P>,

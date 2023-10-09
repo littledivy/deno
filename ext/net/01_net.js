@@ -474,6 +474,11 @@ function createListenDatagram(udpOpFn, unixOpFn) {
   };
 }
 
+function openTcpFd(fd) {
+  const rid = ops.op_net_open_tcp(fd);
+  return new TcpConn(rid);
+}
+
 async function connect(args) {
   switch (args.transport ?? "tcp") {
     case "tcp": {
@@ -513,6 +518,7 @@ export {
   Listener,
   listenOptionApiName,
   resolveDns,
+  openTcpFd,
   shutdown,
   TcpConn,
   UnixConn,

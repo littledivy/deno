@@ -249,18 +249,7 @@ function _isPipeName(s: unknown): s is string {
 
 function _createHandle(fd: number, isServer: boolean): Handle {
   validateInt32(fd, "fd", 0);
-
-  const type = guessHandleType(fd);
-
-  if (type === "PIPE") {
-    return new Pipe(isServer ? PipeConstants.SERVER : PipeConstants.SOCKET);
-  }
-
-  if (type === "TCP") {
-    return new TCP(isServer ? TCPConstants.SERVER : TCPConstants.SOCKET);
-  }
-
-  throw new ERR_INVALID_FD_TYPE(type);
+  return new TCP(isServer ? TCPConstants.SERVER : TCPConstants.SOCKET);
 }
 
 // Returns an array [options, cb], where options is an object,
@@ -798,8 +787,18 @@ export class Socket extends Duplex {
       this._handle = options.handle;
       this[asyncIdSymbol] = _getNewAsyncId(this._handle);
     } else if (options.fd !== undefined) {
-      // REF: https://github.com/denoland/deno/issues/6529
-      notImplemented("net.Socket.prototype.constructor with fd option");
+      // log error stack
+      console.log(new Error().stack);
+      const { fd } = options;
+
+      this._handle = _createHandle(fd, false);  
+      this[asyncIdSymbol] = _getNewAsyncId(this._handle);
+
+      const err = this._handle.open(fd);
+  
+      if (err) {
+        return err;
+      }
     }
 
     const onread = options.onread;

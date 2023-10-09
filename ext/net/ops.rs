@@ -288,6 +288,22 @@ pub async fn op_net_set_multi_ttl_udp(
   Ok(())
 }
 
+#[op2(fast)]
+#[smi]
+pub fn op_net_open_tcp(
+  state: &mut OpState,
+  #[smi] fd: i32,
+) -> Result<u32, AnyError> {
+  use std::os::unix::io::FromRawFd;
+  let std_stream = unsafe { std::net::TcpStream::from_raw_fd(fd) };
+  let stream = TcpStream::from_std(std_stream)?;
+  Ok(
+    state
+      .resource_table
+      .add(TcpStreamResource::new(stream.into_split())),
+  )
+}
+
 #[op2(async)]
 #[serde]
 pub async fn op_net_connect_tcp<NP>(

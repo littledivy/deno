@@ -45,6 +45,7 @@ import {
   INITIAL_ACCEPT_BACKOFF_DELAY,
   MAX_ACCEPT_BACKOFF_DELAY,
 } from "ext:deno_node/internal_binding/_listen.ts";
+import { openTcpFd } from "ext:deno_net/01_net.js";
 
 /** The type of TCP socket. */
 enum socketType {
@@ -145,9 +146,14 @@ export class TCP extends ConnectionWrap {
    * @param fd The file descriptor to open.
    * @return An error status code.
    */
-  open(_fd: number): number {
-    // REF: https://github.com/denoland/deno/issues/6529
-    notImplemented("TCP.prototype.open");
+  open(fd: number): number {
+    try {
+      this[kStreamBaseField] = openTcpFd(fd);
+    } catch {
+      return codeMap.get("UNKNOWN")!;
+    }
+
+    return 0;
   }
 
   /**
