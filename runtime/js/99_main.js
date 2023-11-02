@@ -319,7 +319,7 @@ function runtimeStart(
   core.setMacrotaskCallback(promiseRejectMacrotaskCallback);
   core.setWasmStreamingCallback(fetch.handleWasmStreaming);
   core.setReportExceptionCallback(event.reportException);
-  ops.op_set_format_exception_callback(formatException);
+  // ops.op_set_format_exception_callback(formatException);
   version.setVersions(
     denoVersion,
     v8Version,
@@ -437,144 +437,70 @@ const finalDenoNs = {
   ...denoNs,
 };
 
-function bootstrapMainRuntime(runtimeOptions) {
-  if (hasBootstrapped) {
-    throw new Error("Worker runtime already bootstrapped");
-  }
-  const nodeBootstrap = globalThis.nodeBootstrap;
+performance.setTimeOrigin(DateNow()); // TODO
+globalThis_ = globalThis;
 
-  const {
-    0: args,
-    1: cpuCount,
-    2: logLevel,
-    3: denoVersion,
-    4: locale,
-    5: location_,
-    6: noColor,
-    7: isTty,
-    8: tsVersion,
-    9: unstableFlag,
-    10: pid,
-    11: target,
-    12: v8Version,
-    13: userAgent,
-    14: inspectFlag,
-    // 15: enableTestingFeaturesFlag
-    16: hasNodeModulesDir,
-    17: maybeBinaryNpmCommandName,
-  } = runtimeOptions;
+// Remove bootstrapping data from the global scope
+delete globalThis.__bootstrap;
+delete globalThis.bootstrap;
+delete globalThis.nodeBootstrap;
 
-  performance.setTimeOrigin(DateNow());
-  globalThis_ = globalThis;
+ObjectDefineProperties(globalThis, mainRuntimeGlobalProperties);
 
-  // Remove bootstrapping data from the global scope
-  delete globalThis.__bootstrap;
-  delete globalThis.bootstrap;
-  delete globalThis.nodeBootstrap;
-  hasBootstrapped = true;
+ObjectDefineProperties(globalThis, {
+  // TODO(bartlomieju): in the future we might want to change the
+  // behavior of setting `name` to actually update the process name.
+  // Empty string matches what browsers do.
+  name: util.writable(""),
+  close: util.writable(windowClose),
+  closed: util.getterOnly(() => windowIsClosing),
+});
 
-  // If the `--location` flag isn't set, make `globalThis.location` `undefined` and
-  // writable, so that they can mock it themselves if they like. If the flag was
-  // set, define `globalThis.location`, using the provided value.
-  if (location_ == null) {
-    mainRuntimeGlobalProperties.location = {
-      writable: true,
-    };
-  } else {
-    location.setLocationHref(location_);
-  }
+ObjectSetPrototypeOf(globalThis, Window.prototype);
+event.setEventTargetData(globalThis);
+event.saveGlobalThisReference(globalThis);
 
-  if (unstableFlag) {
-    ObjectDefineProperties(globalThis, unstableWindowOrWorkerGlobalScope);
-  }
-  ObjectDefineProperties(globalThis, mainRuntimeGlobalProperties);
-  ObjectDefineProperties(globalThis, {
-    // TODO(bartlomieju): in the future we might want to change the
-    // behavior of setting `name` to actually update the process name.
-    // Empty string matches what browsers do.
-    name: util.writable(""),
-    close: util.writable(windowClose),
-    closed: util.getterOnly(() => windowIsClosing),
-  });
-  ObjectSetPrototypeOf(globalThis, Window.prototype);
+event.defineEventHandler(globalThis, "error");
+event.defineEventHandler(globalThis, "load");
+event.defineEventHandler(globalThis, "beforeunload");
+event.defineEventHandler(globalThis, "unload");
+event.defineEventHandler(globalThis, "unhandledrejection");
 
-  if (inspectFlag) {
-    const consoleFromV8 = core.console;
-    const consoleFromDeno = globalThis.console;
-    wrapConsole(consoleFromDeno, consoleFromV8);
-  }
+core.setPromiseRejectCallback(promiseRejectCallback);
 
-  event.setEventTargetData(globalThis);
-  event.saveGlobalThisReference(globalThis);
+runtimeStart(
+  "denoVersion",
+  "v8Version",
+  "tsVersion",
+  "target",
+  "logLevel",
+  false,
+  true,
+);
 
-  event.defineEventHandler(globalThis, "error");
-  event.defineEventHandler(globalThis, "load");
-  event.defineEventHandler(globalThis, "beforeunload");
-  event.defineEventHandler(globalThis, "unload");
-  event.defineEventHandler(globalThis, "unhandledrejection");
+setNumCpus(8);
+setUserAgent("deno");
+setLanguage("us-EN");
 
-  core.setPromiseRejectCallback(promiseRejectCallback);
+let ppid = undefined;
+// TODO: Make all of this lazy.
+ObjectDefineProperties(finalDenoNs, {
+  pid: util.readOnly(0),
+  ppid: util.getterOnly(() => {
+    // lazy because it's expensive
+    if (ppid === undefined) {
+      ppid = ops.op_ppid();
+    }
+    return ppid;
+  }),
+  noColor: util.readOnly(false),
+  args: util.readOnly(ObjectFreeze([])),
+  mainModule: util.getterOnly(opMainModule),
+});
 
-  runtimeStart(
-    denoVersion,
-    v8Version,
-    tsVersion,
-    target,
-    logLevel,
-    noColor,
-    isTty,
-  );
-
-  setNumCpus(cpuCount);
-  setUserAgent(userAgent);
-  setLanguage(locale);
-
-  let ppid = undefined;
-  ObjectDefineProperties(finalDenoNs, {
-    pid: util.readOnly(pid),
-    ppid: util.getterOnly(() => {
-      // lazy because it's expensive
-      if (ppid === undefined) {
-        ppid = ops.op_ppid();
-      }
-      return ppid;
-    }),
-    noColor: util.readOnly(noColor),
-    args: util.readOnly(ObjectFreeze(args)),
-    mainModule: util.getterOnly(opMainModule),
-  });
-
-  if (unstableFlag) {
-    ObjectAssign(finalDenoNs, denoNsUnstable);
-    // TODO(bartlomieju): this is not ideal, but because we use `ObjectAssign`
-    // above any properties that are defined elsewhere using `Object.defineProperty`
-    // are lost.
-    let jupyterNs = undefined;
-    ObjectDefineProperty(finalDenoNs, "jupyter", {
-      get() {
-        if (jupyterNs) {
-          return jupyterNs;
-        }
-        throw new Error(
-          "Deno.jupyter is only available in `deno jupyter` subcommand.",
-        );
-      },
-      set(val) {
-        jupyterNs = val;
-      },
-    });
-  }
-
-  // Setup `Deno` global - we're actually overriding already existing global
-  // `Deno` with `Deno` namespace from "./deno.ts".
-  ObjectDefineProperty(globalThis, "Deno", util.readOnly(finalDenoNs));
-
-  util.log("args", args);
-
-  if (nodeBootstrap) {
-    nodeBootstrap(hasNodeModulesDir, maybeBinaryNpmCommandName);
-  }
-}
+// Setup `Deno` global - we're actually overriding already existing global
+// `Deno` with `Deno` namespace from "./deno.ts".
+ObjectDefineProperty(globalThis, "Deno", finalDenoNs);
 
 function bootstrapWorkerRuntime(
   runtimeOptions,
@@ -693,6 +619,6 @@ function bootstrapWorkerRuntime(
 }
 
 globalThis.bootstrap = {
-  mainRuntime: bootstrapMainRuntime,
+  // mainRuntime: bootstrapMainRuntime,
   workerRuntime: bootstrapWorkerRuntime,
 };

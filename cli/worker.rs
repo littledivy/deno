@@ -160,7 +160,7 @@ impl CliMainWorker {
       self.execute_main_module_possibly_with_npm().await?;
     }
 
-    self.worker.dispatch_load_event(located_script_name!())?;
+    // self.worker.dispatch_load_event(located_script_name!())?;
 
     loop {
       if let Some(hmr_runner) = maybe_hmr_runner.as_mut() {
@@ -191,15 +191,16 @@ impl CliMainWorker {
           .await?;
       }
 
-      if !self
-        .worker
-        .dispatch_beforeunload_event(located_script_name!())?
-      {
-        break;
-      }
+      // if !self
+      //   .worker
+      //   .dispatch_beforeunload_event(located_script_name!())?
+      // {
+      //   break;
+      // }
+      break;
     }
 
-    self.worker.dispatch_unload_event(located_script_name!())?;
+    // self.worker.dispatch_unload_event(located_script_name!())?;
 
     if let Some(coverage_collector) = maybe_coverage_collector.as_mut() {
       self

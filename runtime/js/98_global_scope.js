@@ -254,7 +254,6 @@ ObjectDefineProperties(WorkerNavigator.prototype, {
   },
 });
 const WorkerNavigatorPrototype = WorkerNavigator.prototype;
-
 const mainRuntimeGlobalProperties = {
   Location: location.locationConstructorDescriptor,
   location: location.locationDescriptor,
