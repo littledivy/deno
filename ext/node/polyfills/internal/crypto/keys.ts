@@ -210,11 +210,15 @@ export interface JsonWebKeyInput {
   format: "jwk";
 }
 
-function prepareAsymmetricKey(key) {
+export function prepareAsymmetricKey(key) {
   if (isStringOrBuffer(key)) {
     return { format: "pem", data: getArrayBufferOrView(key, "key") };
   } else if (typeof key == "object") {
     const { key: data, encoding, format, type } = key;
+    if (isKeyObject(data)) {
+      return { data: getKeyMaterial(data), format, type };
+    }
+
     if (!isStringOrBuffer(data)) {
       throw new TypeError("Invalid key type");
     }
