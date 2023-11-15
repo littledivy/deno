@@ -2,6 +2,7 @@
 
 use deno_core::op2;
 use deno_core::OpState;
+use deno_core::v8;
 
 use crate::BootstrapOptions;
 
@@ -16,8 +17,15 @@ deno_core::extension!(
     op_bootstrap_log_level,
     op_bootstrap_no_color,
     op_bootstrap_is_tty,
+    op_bootstrap_options,
   ],
 );
+
+#[op2]
+pub fn op_bootstrap_options<'a>(scope: &'a mut v8::HandleScope, state: &mut OpState) -> v8::Local<'a, v8::Value> {
+  let options = state.borrow::<BootstrapOptions>();
+   options.as_v8(scope)
+}
 
 #[op2]
 #[serde]

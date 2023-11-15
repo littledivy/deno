@@ -489,11 +489,11 @@ impl MainWorker {
   pub fn bootstrap(&mut self, options: BootstrapOptions) {
     self.js_runtime.op_state().borrow_mut().put(options.clone());
     let scope = &mut self.js_runtime.handle_scope();
-    let args = options.as_v8(scope);
+    // let args = options.as_v8(scope);
     let bootstrap_fn = self.bootstrap_fn_global.take().unwrap();
     let bootstrap_fn = v8::Local::new(scope, bootstrap_fn);
     let undefined = v8::undefined(scope);
-    bootstrap_fn.call(scope, undefined.into(), &[args]).unwrap();
+    bootstrap_fn.call(scope, undefined.into(), &[]).unwrap();
   }
 
   /// See [JsRuntime::execute_script](deno_core::JsRuntime::execute_script)

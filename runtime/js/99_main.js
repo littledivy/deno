@@ -450,7 +450,7 @@ const finalDenoNs = {
   ...denoNs,
 };
 
-function bootstrapMainRuntime(runtimeOptions) {
+function bootstrapMainRuntime() {
   if (hasBootstrapped) {
     throw new Error("Worker runtime already bootstrapped");
   }
@@ -467,7 +467,7 @@ function bootstrapMainRuntime(runtimeOptions) {
     7: inspectFlag,
     9: hasNodeModulesDir,
     10: maybeBinaryNpmCommandName,
-  } = runtimeOptions;
+  } = ops.op_bootstrap_options();
 
   performance.setTimeOrigin(DateNow());
   globalThis_ = globalThis;

@@ -106,29 +106,29 @@ impl Default for BootstrapOptions {
 ///
 /// Keep this in sync with `99_main.js`.
 #[derive(Serialize)]
-struct BootstrapV8<'a>(
+pub struct BootstrapV8<'a>(
   // runtime_version
-  &'a str,
+  pub &'a str,
   // location
-  Option<&'a str>,
+  pub Option<&'a str>,
   // ts_version
-  &'a str,
+  pub &'a str,
   // unstable
-  bool,
+  pub bool,
   // granular unstable flags
-  &'a [i32],
+  pub &'a [i32],
   // env!("TARGET")
-  &'a str,
+  pub &'a str,
   // v8_version
-  &'a str,
+  pub &'a str,
   // inspect
-  bool,
+  pub bool,
   // enable_testing_features
-  bool,
+  pub bool,
   // has_node_modules_dir
-  bool,
+  pub bool,
   // maybe_binary_npm_command_name
-  Option<&'a str>,
+  pub Option<&'a str>,
 );
 
 impl BootstrapOptions {
