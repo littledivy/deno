@@ -141,7 +141,6 @@ pub struct SpawnArgs {
   uid: Option<u32>,
   #[cfg(windows)]
   windows_raw_arguments: bool,
-  #[cfg(unix)]
   ipc: i32,
 
   #[serde(flatten)]
@@ -343,8 +342,93 @@ fn create_command(
     Ok((command, pipe_fd))
   }
 
-  #[cfg(not(unix))]
-  return Ok((command, None));
+  #[cfg(windows)]
+  unsafe {
+    if args.ipc >= 0 {
+      use windows_sys::Win32::System::Pipes::{
+        CreateNamedPipeW, PeekNamedPipe, PIPE_READMODE_BYTE, PIPE_READMODE_MESSAGE,
+        PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_TYPE_MESSAGE, PIPE_UNLIMITED_INSTANCES,
+      };
+      use windows_sys::Win32::Foundation::{
+        ERROR_ACCESS_DENIED, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
+      };
+      use windows_sys::Win32::Storage::FileSystem::{
+          CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_FIRST_PIPE_INSTANCE, OPEN_EXISTING,
+          PIPE_ACCESS_DUPLEX,
+      };
+      use windows_sys::Win32::Foundation::CloseHandle;
+      use std::io;
+      use std::path::Path;
+      use std::ptr;
+      use std::os::windows::ffi::OsStrExt;
+
+      let name = format!("\\\\.\\pipe\\{}", uuid::Uuid::new_v4());
+      let mut path = Path::new(&name)
+          .as_os_str()
+          .encode_wide()
+          .collect::<Vec<_>>();
+      path.push(0);
+
+      let hd1 = CreateNamedPipeW(
+        path.as_ptr(),
+        PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
+        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_REJECT_REMOTE_CLIENTS,
+        PIPE_UNLIMITED_INSTANCES,
+        65536,
+        65536,
+        0,
+        ptr::null_mut(),
+      );
+
+      if hd1 == INVALID_HANDLE_VALUE {
+        return Err(std::io::Error::last_os_error().into());
+      }
+
+      // TODO(@littledivy): Handle pipe name collisions
+
+      extern "C" {
+        fn _open_osfhandle(osfhandle: isize, flags: i32) -> i32;
+        fn _close(fd: i32) -> i32;
+      }
+
+      let fd1 = _open_osfhandle(hd1 as isize, 0);
+      if fd1 == -1 {
+        CloseHandle(hd1);
+        return Err(std::io::Error::last_os_error().into());
+      }
+      
+      let hd2 = CreateFileW(
+            path.as_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            ptr::null_mut(),
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            0,
+        );
+
+      if hd2 == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error().into());
+      }
+
+      let fd2 = _open_osfhandle(hd2 as isize, 0);
+      if fd2 == -1 {
+        _close(fd1);
+        CloseHandle(hd2);
+        return Err(std::io::Error::last_os_error().into());
+      }
+
+      /* One end returned to parent process (this) */
+      let pipe_fd = Some(fd1);
+
+      /* The other end passed to child process via DENO_CHANNEL_FD */
+      command.env("DENO_CHANNEL_FD", format!("{}", fd2));
+
+      return Ok((command, pipe_fd));
+    }
+
+    Ok((command, None))
+  }
 }
 
 #[derive(Serialize)]
