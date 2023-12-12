@@ -1,18 +1,16 @@
 // Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
 
-#[cfg(unix)]
 pub use unix::*;
 
-#[cfg(windows)]
-pub use windows::*;
 
-#[cfg(unix)]
 mod unix {
   use std::cell::RefCell;
   use std::future::Future;
   use std::io;
   use std::mem;
+  #[cfg(unix)]
   use std::os::fd::FromRawFd;
+  #[cfg(unix)]
   use std::os::fd::RawFd;
   use std::pin::Pin;
   use std::rc::Rc;
@@ -33,9 +31,16 @@ mod unix {
   use tokio::io::AsyncBufRead;
   use tokio::io::AsyncWriteExt;
   use tokio::io::BufReader;
+  #[cfg(unix)]
   use tokio::net::unix::OwnedReadHalf;
+  #[cfg(unix)]
   use tokio::net::unix::OwnedWriteHalf;
+  #[cfg(unix)]
   use tokio::net::UnixStream;
+
+  #[cfg(windows)]
+  type NamedPipeClient = tokio::fs::File;
+  // use tokio::net::windows::named_pipe::NamedPipeClient;
 
   #[op2(fast)]
   #[smi]
@@ -81,7 +86,10 @@ mod unix {
 
   struct IpcJsonStreamResource {
     read_half: AsyncRefCell<IpcJsonStream>,
+    #[cfg(unix)]
     write_half: AsyncRefCell<OwnedWriteHalf>,
+    #[cfg(windows)]
+    write_half: AsyncRefCell<tokio::io::WriteHalf<NamedPipeClient>>,
     cancel: Rc<CancelHandle>,
   }
 
@@ -91,14 +99,46 @@ mod unix {
     }
   }
 
+  #[cfg(unix)]
+  fn pipe(stream: RawFd) -> Result<(OwnedReadHalf, OwnedWriteHalf), io::Error> {
+    // Safety: The fd is part of a pair of connected sockets create by child process
+    // implementation.
+    let unix_stream =  UnixStream::from_std(unsafe {
+      std::os::unix::net::UnixStream::from_raw_fd(stream)
+    })?;
+    Ok(unix_stream.into_split())
+  }
+
+  #[cfg(windows)]
+  fn pipe(stream: i32) -> Result<(tokio::io::ReadHalf<NamedPipeClient>, tokio::io::WriteHalf<NamedPipeClient>), io::Error> {
+    extern "C" {
+      fn _get_osfhandle(fd: i32) -> isize;
+    }
+    use windows_sys::Win32::System::Pipes::{
+      SetNamedPipeHandleState, PIPE_READMODE_BYTE, PIPE_READMODE_MESSAGE,
+      PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_TYPE_MESSAGE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    };
+    println!("osfhandle {}", stream);
+    let handle = unsafe { _get_osfhandle(stream) };
+    let mode = PIPE_READMODE_BYTE | PIPE_WAIT;
+    
+    // if unsafe { SetNamedPipeHandleState(handle as _, &mode, std::ptr::null_mut(), std::ptr::null_mut()) } == 0 {
+    //   panic!("SetNamedPipeHandleState failed: {}", io::Error::last_os_error());
+    //   return Err(io::Error::last_os_error());
+    // }
+    println!("pipe {:?}", handle);
+    use std::os::windows::io::FromRawHandle;
+    let pipe = unsafe { NamedPipeClient::from_raw_handle(handle as _) };
+    println!("pipe {:?}", pipe);
+    Ok(tokio::io::split(pipe))
+  }
+
   impl IpcJsonStreamResource {
-    fn new(stream: RawFd) -> Result<Self, std::io::Error> {
-      // Safety: The fd is part of a pair of connected sockets create by child process
-      // implementation.
-      let unix_stream = UnixStream::from_std(unsafe {
-        std::os::unix::net::UnixStream::from_raw_fd(stream)
-      })?;
-      let (read_half, write_half) = unix_stream.into_split();
+    fn new(stream: i32) -> Result<Self, std::io::Error> {
+      println!("new {}", stream);
+      let (read_half, write_half) = pipe(stream)?;
+      dbg!(&read_half);
+
       Ok(Self {
         read_half: AsyncRefCell::new(IpcJsonStream::new(read_half)),
         write_half: AsyncRefCell::new(write_half),
@@ -144,12 +184,24 @@ mod unix {
   //
   // `\n` is used as a delimiter between messages.
   struct IpcJsonStream {
+    #[cfg(unix)]
     pipe: BufReader<OwnedReadHalf>,
+    #[cfg(windows)]
+    pipe: BufReader<tokio::io::ReadHalf<NamedPipeClient>>,
     buffer: Vec<u8>,
   }
 
   impl IpcJsonStream {
+    #[cfg(unix)]
     fn new(pipe: OwnedReadHalf) -> Self {
+      Self {
+        pipe: BufReader::with_capacity(INITIAL_CAPACITY, pipe),
+        buffer: Vec::with_capacity(INITIAL_CAPACITY),
+      }
+    }
+
+    #[cfg(windows)]
+    fn new(pipe: tokio::io::ReadHalf<NamedPipeClient>) -> Self {
       Self {
         pipe: BufReader::with_capacity(INITIAL_CAPACITY, pipe),
         buffer: Vec::with_capacity(INITIAL_CAPACITY),
@@ -158,8 +210,10 @@ mod unix {
 
     async fn read_msg(&mut self) -> Result<serde_json::Value, AnyError> {
       let mut json = None;
+      println!("read_msg");
       let nread =
         read_msg_inner(&mut self.pipe, &mut self.buffer, &mut json).await?;
+      println!("read_msg nread {}", nread);
       if nread == 0 {
         // EOF.
         return Ok(serde_json::Value::Null);
@@ -222,9 +276,9 @@ mod unix {
       let (done, used) = {
         let available = match reader.as_mut().poll_fill_buf(cx) {
           std::task::Poll::Ready(t) => t?,
-          std::task::Poll::Pending => return std::task::Poll::Pending,
+          std::task::Poll::Pending => { println!("pending"); return std::task::Poll::Pending; },
         };
-
+        println!("available {:?}", std::str::from_utf8(available));
         if let Some(i) = memchr(b'\n', available) {
           if *read == 0 {
             // Fast path: parse and put into the json slot directly.
@@ -470,26 +524,5 @@ mod unix {
       let empty = b"";
       assert_eq!(super::memchr(b'\n', empty), None);
     }
-  }
-}
-
-#[cfg(windows)]
-mod windows {
-  use deno_core::error::AnyError;
-  use deno_core::op2;
-
-  #[op2(fast)]
-  pub fn op_node_ipc_pipe() -> Result<(), AnyError> {
-    Err(deno_core::error::not_supported())
-  }
-
-  #[op2(async)]
-  pub async fn op_node_ipc_write() -> Result<(), AnyError> {
-    Err(deno_core::error::not_supported())
-  }
-
-  #[op2(async)]
-  pub async fn op_node_ipc_read() -> Result<(), AnyError> {
-    Err(deno_core::error::not_supported())
   }
 }

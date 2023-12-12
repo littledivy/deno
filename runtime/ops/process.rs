@@ -346,17 +346,18 @@ fn create_command(
   unsafe {
     if args.ipc >= 0 {
       use windows_sys::Win32::System::Pipes::{
-        CreateNamedPipeW, PeekNamedPipe, PIPE_READMODE_BYTE, PIPE_READMODE_MESSAGE,
-        PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_TYPE_MESSAGE, PIPE_UNLIMITED_INSTANCES,
+        ConnectNamedPipe, CreateNamedPipeW, PeekNamedPipe, PIPE_READMODE_BYTE, PIPE_READMODE_MESSAGE, 
+        PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_TYPE_MESSAGE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
       };
       use windows_sys::Win32::Foundation::{
-        ERROR_ACCESS_DENIED, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
+        ERROR_ACCESS_DENIED, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE, ERROR_PIPE_CONNECTED, SetHandleInformation, HANDLE_FLAG_INHERIT
       };
       use windows_sys::Win32::Storage::FileSystem::{
           CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_FIRST_PIPE_INSTANCE, OPEN_EXISTING,
-          PIPE_ACCESS_DUPLEX,
+          PIPE_ACCESS_DUPLEX, FILE_FLAG_OVERLAPPED, WRITE_DAC
       };
       use windows_sys::Win32::Foundation::CloseHandle;
+      use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
       use std::io;
       use std::path::Path;
       use std::ptr;
@@ -369,22 +370,68 @@ fn create_command(
           .collect::<Vec<_>>();
       path.push(0);
 
-      let hd1 = CreateNamedPipeW(
+      // TODO(@littledivy): Handle pipe name collisions
+
+      let mut hd1 = CreateNamedPipeW(
         path.as_ptr(),
-        PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
-        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_REJECT_REMOTE_CLIENTS,
-        PIPE_UNLIMITED_INSTANCES,
+        PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE | FILE_FLAG_OVERLAPPED | WRITE_DAC,
+        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE,
+        1,
         65536,
         65536,
         0,
-        ptr::null_mut(),
+        std::ptr::null_mut(),
       );
 
       if hd1 == INVALID_HANDLE_VALUE {
         return Err(std::io::Error::last_os_error().into());
       }
 
-      // TODO(@littledivy): Handle pipe name collisions
+      /* Create child pipe handle. */
+      let mut s = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: ptr::null_mut(),
+        bInheritHandle: 1,
+      };
+      let mut hd2 = CreateFileW(
+            path.as_ptr(),
+            GENERIC_READ | GENERIC_WRITE | WRITE_DAC,
+            0,
+            &mut s,
+            OPEN_EXISTING,
+            FILE_FLAG_OVERLAPPED,
+            0,
+        );
+      if hd2 == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error().into());
+      }
+
+      // Will not block because we have create the pair.
+      if ConnectNamedPipe(hd1, ptr::null_mut()) == 0 {
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() != Some(ERROR_PIPE_CONNECTED as i32) {
+          CloseHandle(hd2);
+          return Err(err.into());
+        }
+      }
+
+      use windows_sys::Win32::System::Threading::GetCurrentProcess;
+      use windows_sys::Win32::Foundation::DuplicateHandle;
+      use windows_sys::Win32::Foundation::DUPLICATE_SAME_ACCESS;
+
+      // Duplicating the handle to allow the child process to use it.
+      if DuplicateHandle(
+        GetCurrentProcess(),
+        hd2,
+        GetCurrentProcess(),
+        &mut hd2,
+        0,
+        1,
+        DUPLICATE_SAME_ACCESS,
+      ) == 0
+      {
+        return Err(std::io::Error::last_os_error().into());
+      }
 
       extern "C" {
         fn _open_osfhandle(osfhandle: isize, flags: i32) -> i32;
@@ -395,20 +442,6 @@ fn create_command(
       if fd1 == -1 {
         CloseHandle(hd1);
         return Err(std::io::Error::last_os_error().into());
-      }
-      
-      let hd2 = CreateFileW(
-            path.as_ptr(),
-            GENERIC_READ | GENERIC_WRITE,
-            0,
-            ptr::null_mut(),
-            OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL,
-            0,
-        );
-
-      if hd2 == INVALID_HANDLE_VALUE {
-        return Err(io::Error::last_os_error().into());
       }
 
       let fd2 = _open_osfhandle(hd2 as isize, 0);
