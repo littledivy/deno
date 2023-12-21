@@ -8,6 +8,7 @@ use deno_core::Resource;
 use deno_core::ResourceId;
 use serde::Deserialize;
 use std::borrow::Cow;
+use std::ffi::c_void;
 use std::rc::Rc;
 use wgpu_types::SurfaceStatus;
 
@@ -34,6 +35,13 @@ impl Resource for WebGpuSurface {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AlphaMode {
+  Opaque,
+  Premultiplied,
+}
+
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SurfaceConfigureArgs {
   surface_rid: ResourceId,
@@ -43,7 +51,7 @@ pub struct SurfaceConfigureArgs {
   width: u32,
   height: u32,
   present_mode: Option<wgpu_types::PresentMode>,
-  alpha_mode: wgpu_types::CompositeAlphaMode,
+  alpha_mode: AlphaMode,
   view_formats: Vec<wgpu_types::TextureFormat>,
 }
 
@@ -69,7 +77,10 @@ pub fn op_webgpu_surface_configure(
     width: args.width,
     height: args.height,
     present_mode: args.present_mode.unwrap_or_default(),
-    alpha_mode: args.alpha_mode,
+    alpha_mode: match args.alpha_mode {
+      AlphaMode::Opaque => wgpu_types::CompositeAlphaMode::Opaque,
+      AlphaMode::Premultiplied => wgpu_types::CompositeAlphaMode::PreMultiplied,
+    },
     view_formats: args.view_formats,
   };
 
@@ -130,4 +141,40 @@ pub fn op_webgpu_surface_present(
   let _ = gfx_select!(device => instance.surface_present(surface))?;
 
   Ok(())
+}
+
+#[op2(fast)]
+#[smi]
+pub fn op_webgpu_surface_create(
+  state: &mut OpState,
+  #[string] system: &str,
+  win_handle: *const c_void,
+  display_handle: *const c_void,
+) -> Result<ResourceId, AnyError> {
+  let instance = state.borrow::<super::Instance>();
+
+  let win_handle = {
+    let mut handle = raw_window_handle::AppKitWindowHandle::empty();
+    handle.ns_window = win_handle as *mut c_void;
+    handle.ns_view = display_handle as *mut c_void;
+
+    raw_window_handle::RawWindowHandle::AppKit(handle)
+  };
+
+  let display_handle = raw_window_handle::AppKitDisplayHandle::empty();
+  let display_handle =
+    raw_window_handle::RawDisplayHandle::AppKit(display_handle);
+
+  let surface = {
+    instance.instance_create_surface(
+      display_handle,
+      win_handle,
+      Default::default(),
+    )
+  };
+
+  let rid = state
+    .resource_table
+    .add(WebGpuSurface(instance.clone(), surface));
+  Ok(rid)
 }

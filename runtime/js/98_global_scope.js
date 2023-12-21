@@ -189,6 +189,7 @@ unstableForWindowOrWorkerGlobalScope[unstableIds.webgpu] = {
   GPUError: webGPUNonEnumerable(() => webgpu.GPUError),
   GPUValidationError: webGPUNonEnumerable(() => webgpu.GPUValidationError),
   GPUOutOfMemoryError: webGPUNonEnumerable(() => webgpu.GPUOutOfMemoryError),
+  createWindowSurface: webGPUNonEnumerable(() => webgpu.createWindowSurface),
 };
 
 class Navigator {

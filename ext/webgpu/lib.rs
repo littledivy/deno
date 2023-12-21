@@ -51,6 +51,9 @@ mod macros {
   macro_rules! gfx_put {
     ($id:expr => $global:ident.$method:ident( $($param:expr),* ) => $state:expr, $rc:expr) => {{
       let (val, maybe_err) = gfx_select!($id => $global.$method($($param),*));
+      if let Some(ref err) = maybe_err {
+        println!("gfx_put: {}", err);
+      }
       let rid = $state.resource_table.add($rc($global.clone(), val));
       Ok(WebGpuResult::rid_err(rid, maybe_err))
     }};
@@ -59,6 +62,9 @@ mod macros {
   macro_rules! gfx_ok {
     ($id:expr => $global:ident.$method:ident( $($param:expr),* )) => {{
       let maybe_err = gfx_select!($id => $global.$method($($param),*)).err();
+      if let Some(ref err) = maybe_err {
+        println!("gfx_ok: {}", err);
+      }
       Ok(WebGpuResult::maybe_err(maybe_err))
     }};
   }
@@ -212,6 +218,11 @@ deno_core::extension!(
     queue::op_webgpu_write_texture,
     // shader
     shader::op_webgpu_create_shader_module,
+    // surface
+    surface::op_webgpu_surface_configure,
+    surface::op_webgpu_surface_get_current_texture,
+    surface::op_webgpu_surface_present,
+    surface::op_webgpu_surface_create,
   ],
   lazy_loaded_esm = ["01_webgpu.js"],
 );
