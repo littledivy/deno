@@ -38,7 +38,7 @@ features = ["metal"]
 # We want the wgpu-core Direct3D backend on Windows.
 [target.'cfg(windows)'.dependencies.wgpu-core]
 workspace = true
-features = ["dx12"]
+features = ["dx11", "dx12"]
 
 [target.'cfg(windows)'.dependencies.wgpu-hal]
 workspace = true

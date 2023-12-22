@@ -153,18 +153,7 @@ pub fn op_webgpu_surface_create(
 ) -> Result<ResourceId, AnyError> {
   let instance = state.borrow::<super::Instance>();
 
-  let win_handle = {
-    let mut handle = raw_window_handle::AppKitWindowHandle::empty();
-    handle.ns_window = win_handle as *mut c_void;
-    handle.ns_view = display_handle as *mut c_void;
-
-    raw_window_handle::RawWindowHandle::AppKit(handle)
-  };
-
-  let display_handle = raw_window_handle::AppKitDisplayHandle::empty();
-  let display_handle =
-    raw_window_handle::RawDisplayHandle::AppKit(display_handle);
-
+  let (win_handle, display_handle) = raw_window(win_handle, display_handle);
   let surface = {
     instance.instance_create_surface(
       display_handle,
@@ -177,4 +166,37 @@ pub fn op_webgpu_surface_create(
     .resource_table
     .add(WebGpuSurface(instance.clone(), surface));
   Ok(rid)
+}
+
+#[cfg(target_os = "macos")]
+fn raw_window(
+  ns_window: *const c_void,
+  ns_view: *const c_void,
+) -> (raw_window_handle::RawWindowHandle, raw_window_handle::RawDisplayHandle) {
+  let win_handle = {
+    let mut handle = raw_window_handle::AppKitWindowHandle::empty();
+    handle.ns_window = ns_window as *mut c_void;
+    handle.ns_view = ns_view as *mut c_void;
+
+    raw_window_handle::RawWindowHandle::AppKit(handle)
+  };
+  let display_handle =
+    raw_window_handle::RawDisplayHandle::AppKit(raw_window_handle::AppKitDisplayHandle::empty());
+  (win_handle, display_handle)
+}
+
+#[cfg(target_os = "windows")]
+fn raw_window(
+  core_window: *const c_void,
+  _: *const c_void,
+) -> (raw_window_handle::RawWindowHandle, raw_window_handle::RawDisplayHandle) {
+  use raw_window_handle::WinRtWindowHandle;
+  use raw_window_handle::WindowsDisplayHandle;
+
+  let mut handle = WinRtWindowHandle::empty();
+  handle.core_window = core_window as *mut c_void;
+
+  let win_handle = raw_window_handle::RawWindowHandle::WinRt(handle);
+  let display_handle = raw_window_handle::RawDisplayHandle::Windows(WindowsDisplayHandle::empty());
+  (win_handle, display_handle)
 }
