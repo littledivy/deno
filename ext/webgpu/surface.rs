@@ -153,7 +153,7 @@ pub fn op_webgpu_surface_create(
 ) -> Result<ResourceId, AnyError> {
   let instance = state.borrow::<super::Instance>();
 
-  let (win_handle, display_handle) = raw_window(win_handle, display_handle);
+  let (win_handle, display_handle) = raw_window(system, win_handle, display_handle);
   let surface = {
     instance.instance_create_surface(
       display_handle,
@@ -170,6 +170,7 @@ pub fn op_webgpu_surface_create(
 
 #[cfg(target_os = "macos")]
 fn raw_window(
+  _system: &str,
   ns_window: *const c_void,
   ns_view: *const c_void,
 ) -> (raw_window_handle::RawWindowHandle, raw_window_handle::RawDisplayHandle) {
@@ -187,16 +188,32 @@ fn raw_window(
 
 #[cfg(target_os = "windows")]
 fn raw_window(
-  core_window: *const c_void,
-  _: *const c_void,
-) -> (raw_window_handle::RawWindowHandle, raw_window_handle::RawDisplayHandle) {
-  use raw_window_handle::WinRtWindowHandle;
+  system: &str,
+  window: *const c_void,
+  hinstance: *const c_void,
+) -> (raw_window_handle::RawWindowHandle, raw_window_handle::RawDisplayHandle) {  
   use raw_window_handle::WindowsDisplayHandle;
 
-  let mut handle = WinRtWindowHandle::empty();
-  handle.core_window = core_window as *mut c_void;
+  let win_handle = match system {
+    "win32" => {
+      use raw_window_handle::Win32WindowHandle;
 
-  let win_handle = raw_window_handle::RawWindowHandle::WinRt(handle);
+      let mut handle = Win32WindowHandle::empty();
+      handle.hwnd = window as *mut c_void;
+      handle.hinstance = hinstance as *mut c_void;
+
+      raw_window_handle::RawWindowHandle::Win32(handle)
+    }
+    "winrt" => {
+      use raw_window_handle::WinRtWindowHandle;
+      
+      let mut handle = WinRtWindowHandle::empty();
+      handle.core_window = window as *mut c_void;
+      raw_window_handle::RawWindowHandle::WinRt(handle)
+    }
+    _ => unreachable!(),
+  };
+
   let display_handle = raw_window_handle::RawDisplayHandle::Windows(WindowsDisplayHandle::empty());
   (win_handle, display_handle)
 }
