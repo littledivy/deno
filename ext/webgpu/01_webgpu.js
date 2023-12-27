@@ -5125,7 +5125,7 @@ function createCanvasContext(options) {
 
 function createWindowSurface(system, winHandle, displayHandle) {
   const rid = ops.op_webgpu_surface_create(
-    system.rid,
+    system,
     winHandle,
     displayHandle,
   );
