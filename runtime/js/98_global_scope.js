@@ -44,10 +44,12 @@ import * as prompt from "ext:runtime/41_prompt.js";
 import * as imageData from "ext:deno_web/16_image_data.js";
 import {
   loadWebGPU,
+  loadWebGPUSurface,
   webgpu,
+  webgpuSurface,
   webGPUNonEnumerable,
+  webGPUSurfaceNonEnumerable,
 } from "ext:deno_webgpu/00_init.js";
-import * as webgpuSurface from "ext:deno_webgpu/02_surface.js";
 import { unstableIds } from "ext:runtime/90_deno_ns.js";
 
 // https://developer.mozilla.org/en-US/docs/Web/API/WindowOrWorkerGlobalScope
@@ -195,7 +197,7 @@ unstableForWindowOrWorkerGlobalScope[unstableIds.webgpu] = {
   GPUError: webGPUNonEnumerable(() => webgpu.GPUError),
   GPUValidationError: webGPUNonEnumerable(() => webgpu.GPUValidationError),
   GPUOutOfMemoryError: webGPUNonEnumerable(() => webgpu.GPUOutOfMemoryError),
-  GPUCanvasContext: webGPUNonEnumerable(() => webgpuSurface.GPUCanvasContext),
+  GPUCanvasContext: webGPUSurfaceNonEnumerable(() => webgpuSurface.GPUCanvasContext),
 };
 
 class Navigator {

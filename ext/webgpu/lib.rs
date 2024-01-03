@@ -216,8 +216,8 @@ deno_core::extension!(
     surface::op_webgpu_surface_get_current_texture,
     surface::op_webgpu_surface_present
   ],
-  esm = ["00_init.js", "02_surface.js"],
-  lazy_loaded_esm = ["01_webgpu.js"],
+  esm = ["00_init.js"],
+  lazy_loaded_esm = ["01_webgpu.js", "02_surface.js"],
 );
 
 fn deserialize_features(features: &wgpu_types::Features) -> Vec<&'static str> {

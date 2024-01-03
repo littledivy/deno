@@ -36,4 +36,40 @@ function loadWebGPU() {
   }
 }
 
-export { loadWebGPU, webgpu, webGPUNonEnumerable };
+let webgpuSurface;
+function loadWebGPUSurface() {
+  loadWebGPU();
+
+  if (!webgpuSurface) {
+    webgpuSurface = ops.op_lazy_load_esm(
+      "ext:deno_webgpu/02_surface.js",
+    );
+  }
+}
+
+function webGPUSurfaceNonEnumerable(getter) {
+  let valueIsSet = false;
+  let value;
+
+  return {
+    get() {
+      loadWebGPUSurface();
+
+      if (valueIsSet) {
+        return value;
+      } else {
+        return getter();
+      }
+    },
+    set(v) {
+      loadWebGPUSurface();
+
+      valueIsSet = true;
+      value = v;
+    },
+    enumerable: false,
+    configurable: true,
+  };
+}
+
+export { loadWebGPUSurface, webgpuSurface, loadWebGPU, webgpu, webGPUNonEnumerable, webGPUSurfaceNonEnumerable };
