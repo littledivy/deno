@@ -52,9 +52,9 @@ use crate::args::StorageKeyResolver;
 use crate::emit::Emitter;
 use crate::errors;
 use crate::npm::CliNpmResolver;
-use crate::tools;
-use crate::tools::coverage::CoverageCollector;
-use crate::tools::run::hmr::HmrRunner;
+// use crate::tools;
+// use crate::tools::coverage::CoverageCollector;
+// use crate::tools::run::hmr::HmrRunner;
 use crate::util::checksum;
 use crate::util::file_watcher::WatcherCommunicator;
 use crate::util::file_watcher::WatcherRestartMode;
@@ -174,14 +174,14 @@ impl CliMainWorker {
         let watcher_communicator =
           self.shared.maybe_file_watcher_communicator.clone().unwrap();
 
-        let hmr_future = hmr_runner.run().boxed_local();
+       //  let hmr_future = hmr_runner.run().boxed_local();
         let event_loop_future = self.worker.run_event_loop(false).boxed_local();
 
         let result;
         select! {
-          hmr_result = hmr_future => {
-            result = hmr_result;
-          },
+          // hmr_result = hmr_future => {
+          //  result = hmr_result;
+          // },
           event_loop_result = event_loop_future => {
             result = event_loop_result;
           }
@@ -209,24 +209,24 @@ impl CliMainWorker {
     self.worker.dispatch_unload_event(located_script_name!())?;
 
     if let Some(coverage_collector) = maybe_coverage_collector.as_mut() {
-      self
-        .worker
-        .js_runtime
-        .with_event_loop_future(
-          coverage_collector.stop_collecting().boxed_local(),
-          PollEventLoopOptions::default(),
-        )
-        .await?;
+      //self
+      //  .worker
+      //  .js_runtime
+      //  .with_event_loop_future(
+      //    coverage_collector.stop_collecting().boxed_local(),
+      //    PollEventLoopOptions::default(),
+      //  )
+      //  .await?;
     }
     if let Some(hmr_runner) = maybe_hmr_runner.as_mut() {
-      self
-        .worker
-        .js_runtime
-        .with_event_loop_future(
-          hmr_runner.stop().boxed_local(),
-          PollEventLoopOptions::default(),
-        )
-        .await?;
+      //self
+      //  .worker
+      //  .js_runtime
+      //  .with_event_loop_future(
+      //    hmr_runner.stop().boxed_local(),
+      //    PollEventLoopOptions::default(),
+      //  )
+      //  .await?;
     }
 
     Ok(self.worker.exit_code())
@@ -325,22 +325,24 @@ impl CliMainWorker {
 
   pub async fn maybe_setup_coverage_collector(
     &mut self,
-  ) -> Result<Option<CoverageCollector>, AnyError> {
+  // ) -> Result<Option<CoverageCollector>, AnyError> {
+  ) -> Result<Option<()>, AnyError> {
     if let Some(coverage_dir) = &self.shared.options.coverage_dir {
-      let session = self.worker.create_inspector_session().await;
+     // let session = self.worker.create_inspector_session().await;
 
-      let coverage_dir = PathBuf::from(coverage_dir);
-      let mut coverage_collector =
-        tools::coverage::CoverageCollector::new(coverage_dir, session);
-      self
-        .worker
-        .js_runtime
-        .with_event_loop_future(
-          coverage_collector.start_collecting().boxed_local(),
-          PollEventLoopOptions::default(),
-        )
-        .await?;
-      Ok(Some(coverage_collector))
+     // let coverage_dir = PathBuf::from(coverage_dir);
+     // let mut coverage_collector =
+     //   tools::coverage::CoverageCollector::new(coverage_dir, session);
+     // self
+     //   .worker
+     //  .js_runtime
+     //   .with_event_loop_future(
+     //     coverage_collector.start_collecting().boxed_local(),
+     //     PollEventLoopOptions::default(),
+     //   )
+     //   .await?;
+     // Ok(Some(coverage_collector))
+     Ok(Some(()))
     } else {
       Ok(None)
     }
@@ -348,28 +350,31 @@ impl CliMainWorker {
 
   pub async fn maybe_setup_hmr_runner(
     &mut self,
-  ) -> Result<Option<HmrRunner>, AnyError> {
-    if !self.shared.options.hmr {
-      return Ok(None);
-    }
+  // ) -> Result<Option<HmrRunner>, AnyError> {
+  ) -> Result<Option<()>, AnyError> {
+    return Ok(None);
 
-    let watcher_communicator =
-      self.shared.maybe_file_watcher_communicator.clone().unwrap();
-    let emitter = self.shared.emitter.clone().unwrap();
+    //if !self.shared.options.hmr {
+      //return Ok(None);
+    //}
 
-    let session = self.worker.create_inspector_session().await;
-    let mut hmr_runner = HmrRunner::new(emitter, session, watcher_communicator);
+    //let watcher_communicator =
+    // self.shared.maybe_file_watcher_communicator.clone().unwrap();
+    //let emitter = self.shared.emitter.clone().unwrap();
 
-    self
-      .worker
-      .js_runtime
-      .with_event_loop_future(
-        hmr_runner.start().boxed_local(),
-        PollEventLoopOptions::default(),
-      )
-      .await?;
+    //let session = self.worker.create_inspector_session().await;
+    //let mut hmr_runner = HmrRunner::new(emitter, session, watcher_communicator);
 
-    Ok(Some(hmr_runner))
+    //self
+    //  .worker
+    //  .js_runtime
+    //  .with_event_loop_future(
+    //    hmr_runner.start().boxed_local(),
+    //    PollEventLoopOptions::default(),
+    //  )
+    //  .await?;
+
+   // Ok(Some(hmr_runner))
   }
 
   pub fn execute_script_static(

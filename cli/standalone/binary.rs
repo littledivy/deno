@@ -408,35 +408,7 @@ impl<'a> DenoCompileBinaryWriter<'a> {
       let path = std::env::current_exe()?;
       return Ok(std::fs::read(path)?);
     }
-
-    let target = compile_flags.resolve_target();
-    let binary_name = format!("deno-{target}.zip");
-
-    let binary_path_suffix = if crate::version::is_canary() {
-      format!("canary/{}/{}", crate::version::GIT_COMMIT_HASH, binary_name)
-    } else {
-      format!("release/v{}/{}", env!("CARGO_PKG_VERSION"), binary_name)
-    };
-
-    let download_directory = self.deno_dir.dl_folder_path();
-    let binary_path = download_directory.join(&binary_path_suffix);
-
-    if !binary_path.exists() {
-      self
-        .download_base_binary(&download_directory, &binary_path_suffix)
-        .await?;
-    }
-
-    let archive_data = std::fs::read(binary_path)?;
-    let temp_dir = tempfile::TempDir::new()?;
-    let base_binary_path = crate::tools::upgrade::unpack_into_dir(
-      archive_data,
-      target.contains("windows"),
-      &temp_dir,
-    )?;
-    let base_binary = std::fs::read(base_binary_path)?;
-    drop(temp_dir); // delete the temp dir
-    Ok(base_binary)
+    todo!()
   }
 
   async fn download_base_binary(
