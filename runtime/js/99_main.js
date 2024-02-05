@@ -886,6 +886,8 @@ function bootstrapMainRuntime(runtimeOptions) {
   if (nodeBootstrap) {
     nodeBootstrap(hasNodeModulesDir, maybeBinaryNpmCommandName);
   }
+
+  delete globalThis.window;
 }
 
 function bootstrapWorkerRuntime(

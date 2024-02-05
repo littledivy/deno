@@ -186,7 +186,11 @@ export class ChildProcess extends EventEmitter {
     this.spawnargs = [cmd, ...cmdArgs];
 
     const ipc = normalizedStdio.indexOf("ipc");
-
+    
+    if (env.NODE_OPTIONS) {
+      // TODO: filter only V8 flags
+      env.DENO_V8_FLAGS = env.NODE_OPTIONS.trim();
+    }
     const stringEnv = mapValues(env, (value) => value.toString());
     try {
       this.#process = new Deno.Command(cmd, {

@@ -156,7 +156,12 @@ export function fork(
 
   Object.assign(options.env ??= {}, {
     DENO_DONT_USE_INTERNAL_NODE_COMPAT_STATE: op_npm_process_state(),
+    DENO_V8_FLAGS: "--max-old-space-size=8192",
   });
+
+  console.log(
+    `Forking ${options.execPath} with args: ${args.join(" ")}`
+  );
 
   return spawn(options.execPath, args, options);
 }
@@ -185,6 +190,10 @@ export function spawn(
   options = normalizeSpawnArguments(command, args, options);
 
   validateAbortSignal(options?.signal, "options.signal");
+
+  console.log(
+    `Spawning ${command} with args: ${args.join(" ")}`
+  );
   return new ChildProcess(command, args, options);
 }
 
