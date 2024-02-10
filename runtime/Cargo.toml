@@ -11,6 +11,7 @@ description = "Provides the deno runtime library"
 
 [features]
 webcrypto = ["deno_crypto"]
+webgpu = ["deno_webgpu"]
 
 # "fake" feature that allows to generate docs on docs.rs
 docsrs = []
@@ -96,7 +97,7 @@ deno_terminal.workspace = true
 deno_tls.workspace = true
 deno_url.workspace = true
 deno_web.workspace = true
-deno_webgpu.workspace = true
+deno_webgpu = { workspace = true, optional = true }
 deno_webidl.workspace = true
 deno_websocket.workspace = true
 deno_webstorage.workspace = true

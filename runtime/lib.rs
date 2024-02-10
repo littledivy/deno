@@ -6,7 +6,6 @@ pub use deno_canvas;
 pub use deno_console;
 pub use deno_core;
 pub use deno_cron;
-// pub use deno_crypto;
 pub use deno_fetch;
 pub use deno_ffi;
 pub use deno_fs;
@@ -19,7 +18,6 @@ pub use deno_node;
 pub use deno_tls;
 pub use deno_url;
 pub use deno_web;
-pub use deno_webgpu;
 pub use deno_webidl;
 pub use deno_websocket;
 pub use deno_webstorage;
@@ -100,6 +98,7 @@ pub static UNSTABLE_GRANULAR_FLAGS: &[(
     // for "unstableIds" to see where it's used.
     9,
   ),
+  #[cfg(feature = "webgpu")]
   (
     deno_webgpu::UNSTABLE_FEATURE_NAME,
     "Enable unstable `WebGPU` API",

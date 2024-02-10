@@ -63,6 +63,12 @@ extension!(runtime,
     {
         ext.esm_files.to_mut().push(ExtensionFileSource::new("ext:deno_crypto/00_crypto.js", "const crypto = {}; export { crypto }"));
     }
+
+    #[cfg(not(feature = "webgpu"))]
+    {
+        ext.esm_files.to_mut().push(ExtensionFileSource::new("ext:deno_webgpu/00_init.js", "const loadWebGPU = () => {}; export { loadWebGPU }"));
+        ext.esm_files.to_mut().push(ExtensionFileSource::new("ext:deno_webgpu/02_surface.js", "const webgpu = {}; export { webgpu }"));
+    }
   }
 );
 

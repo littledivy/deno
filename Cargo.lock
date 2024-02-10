@@ -1029,6 +1029,7 @@ dependencies = [
  "deno_semver",
  "deno_task_shell",
  "deno_terminal",
+ "deno_webgpu",
  "dissimilar",
  "dotenvy",
  "dprint-plugin-json",
