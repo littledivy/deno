@@ -25,10 +25,10 @@ use deno_core::SourceMapGetter;
 use deno_lockfile::Lockfile;
 use deno_runtime::deno_broadcast_channel::InMemoryBroadcastChannel;
 use deno_runtime::deno_fs;
-use deno_runtime::deno_node;
-use deno_runtime::deno_node::NodeResolution;
-use deno_runtime::deno_node::NodeResolutionMode;
-use deno_runtime::deno_node::NodeResolver;
+use deno_node;
+use deno_node::NodeResolution;
+use deno_node::NodeResolutionMode;
+use deno_node::NodeResolver;
 use deno_runtime::deno_tls::RootCertStoreProvider;
 use deno_runtime::deno_web::BlobStore;
 use deno_runtime::fmt_errors::format_js_error;
@@ -631,6 +631,7 @@ impl CliMainWorkerFactory {
       strace_ops: shared.options.strace_ops.clone(),
       module_loader,
       fs: shared.fs.clone(),
+      #[cfg(feature = "node")]
       npm_resolver: Some(shared.npm_resolver.clone().into_npm_resolver()),
       get_error_class_fn: Some(&errors::get_error_class_name),
       cache_storage_dir,
@@ -832,6 +833,7 @@ fn create_web_worker_callback(
       source_map_getter: maybe_source_map_getter,
       module_loader,
       fs: shared.fs.clone(),
+      #[cfg(feature = "node")]
       npm_resolver: Some(shared.npm_resolver.clone().into_npm_resolver()),
       worker_type: args.worker_type,
       maybe_inspector_server,

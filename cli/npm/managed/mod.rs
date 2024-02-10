@@ -19,9 +19,9 @@ use deno_npm::NpmPackageId;
 use deno_npm::NpmResolutionPackage;
 use deno_npm::NpmSystemInfo;
 use deno_runtime::deno_fs::FileSystem;
-use deno_runtime::deno_node::NodePermissions;
-use deno_runtime::deno_node::NodeResolutionMode;
-use deno_runtime::deno_node::NpmResolver;
+use deno_node::NodePermissions;
+use deno_node::NodeResolutionMode;
+use deno_node::NpmResolver;
 use deno_semver::package::PackageNv;
 use deno_semver::package::PackageReq;
 

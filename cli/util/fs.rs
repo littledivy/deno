@@ -23,7 +23,7 @@ pub use deno_core::normalize_path;
 use deno_core::unsync::spawn_blocking;
 use deno_core::ModuleSpecifier;
 use deno_runtime::deno_fs::FileSystem;
-use deno_runtime::deno_node::PathClean;
+use deno_node::PathClean;
 
 use crate::util::progress_bar::ProgressBar;
 use crate::util::progress_bar::ProgressBarStyle;

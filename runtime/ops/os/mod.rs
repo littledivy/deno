@@ -10,7 +10,6 @@ use deno_core::url::Url;
 use deno_core::v8;
 use deno_core::Op;
 use deno_core::OpState;
-use deno_node::NODE_ENV_VAR_ALLOWLIST;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::env;
@@ -124,10 +123,14 @@ fn op_get_env(
   state: &mut OpState,
   #[string] key: String,
 ) -> Result<Option<String>, AnyError> {
-  let skip_permission_check = NODE_ENV_VAR_ALLOWLIST.contains(&key);
+    #[cfg(feature = "node")]
+  {
+  let skip_permission_check = deno_node::NODE_ENV_VAR_ALLOWLIST.contains(&key);
 
   if !skip_permission_check {
     state.borrow_mut::<PermissionsContainer>().check_env(&key)?;
+  }
+
   }
 
   if key.is_empty() {

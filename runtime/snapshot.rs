@@ -69,6 +69,7 @@ impl deno_napi::NapiPermissions for Permissions {
   }
 }
 
+#[cfg(feature = "node")]
 impl deno_node::NodePermissions for Permissions {
   fn check_net_url(
     &mut self,
@@ -240,6 +241,7 @@ pub fn create_runtime_snapshot(
     deno_http::deno_http::init_ops_and_esm::<DefaultHttpPropertyExtractor>(),
     deno_io::deno_io::init_ops_and_esm(Default::default()),
     deno_fs::deno_fs::init_ops_and_esm::<Permissions>(fs.clone()),
+    #[cfg(feature = "node")]
     deno_node::deno_node::init_ops_and_esm::<Permissions>(None, fs),
     runtime::init_ops_and_esm(),
     ops::runtime::deno_runtime::init_ops("deno:runtime".parse().unwrap()),
@@ -278,6 +280,7 @@ pub fn create_runtime_snapshot(
       let scope = &mut v8::HandleScope::new(isolate);
 
       let ctx = v8::Context::new(scope);
+      #[cfg(feature = "node")]
       assert_eq!(scope.add_context(ctx), deno_node::VM_CONTEXT_INDEX);
     })),
     skip_op_registration: false,

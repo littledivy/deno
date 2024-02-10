@@ -342,6 +342,7 @@ pub struct WebWorkerOptions {
   pub seed: Option<u64>,
   pub fs: Arc<dyn FileSystem>,
   pub module_loader: Rc<dyn ModuleLoader>,
+  #[cfg(feature = "node")]
   pub npm_resolver: Option<Arc<dyn deno_node::NpmResolver>>,
   pub create_web_worker_cb: Arc<ops::worker_host::CreateWebWorkerCb>,
   pub format_js_error_fn: Option<Arc<FormatJsErrorFn>>,
@@ -466,6 +467,7 @@ impl WebWorker {
       deno_fs::deno_fs::init_ops_and_esm::<PermissionsContainer>(
         options.fs.clone(),
       ),
+      #[cfg(feature = "node")]
       deno_node::deno_node::init_ops_and_esm::<PermissionsContainer>(
         options.npm_resolver,
         options.fs,

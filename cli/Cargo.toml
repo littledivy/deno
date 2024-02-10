@@ -40,8 +40,9 @@ path = "./bench/lsp_bench_standalone.rs"
 [features]
 webcrypto = ["deno_runtime/webcrypto"]
 webgpu = ["deno_runtime/webgpu"]
+node = ["deno_runtime/node"]
 
-default = ["webcrypto", "webgpu", "upgrade", "__vendored_zlib_ng"]
+default = ["webcrypto", "webgpu", "node", "upgrade", "__vendored_zlib_ng"]
 # A feature that enables the upgrade subcommand and the background check for
 # available updates (of deno binary). This is typically disabled for (Linux)
 # distribution packages.
@@ -57,6 +58,7 @@ deno_runtime = { workspace = true, features = ["include_js_files_for_snapshottin
 deno_core = { workspace = true, features = ["include_js_files_for_snapshotting"] }
 deno_crypto.workspace = true
 deno_webgpu.workspace = true
+deno_node.workspace = true
 
 lazy-regex.workspace = true
 serde.workspace = true
@@ -80,6 +82,7 @@ deno_graph = "=0.65.1"
 deno_lint = { version = "=0.56.0", features = ["docs"] }
 deno_lockfile.workspace = true
 deno_npm = "=0.16.0"
+deno_node.workspace = true
 deno_runtime = { workspace = true, features = ["include_js_files_for_snapshotting"] }
 deno_semver = "=0.5.4"
 deno_task_shell = "=0.14.3"

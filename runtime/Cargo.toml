@@ -12,6 +12,7 @@ description = "Provides the deno runtime library"
 [features]
 webcrypto = ["deno_crypto"]
 webgpu = ["deno_webgpu"]
+node = []
 
 # "fake" feature that allows to generate docs on docs.rs
 docsrs = []

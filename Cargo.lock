@@ -1024,6 +1024,7 @@ dependencies = [
  "deno_graph",
  "deno_lint",
  "deno_lockfile",
+ "deno_node",
  "deno_npm",
  "deno_runtime",
  "deno_semver",

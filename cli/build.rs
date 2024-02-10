@@ -12,7 +12,7 @@ mod ts {
   use deno_core::error::AnyError;
   use deno_core::op2;
   use deno_core::OpState;
-  use deno_runtime::deno_node::SUPPORTED_BUILTIN_NODE_MODULES;
+  use deno_node::SUPPORTED_BUILTIN_NODE_MODULES;
   use serde::Serialize;
   use std::collections::HashMap;
   use std::path::Path;

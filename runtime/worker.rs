@@ -147,6 +147,7 @@ pub struct WorkerOptions {
   /// If not provided runtime will error if code being
   /// executed tries to load modules.
   pub module_loader: Rc<dyn ModuleLoader>,
+  #[cfg(feature = "node")]
   pub npm_resolver: Option<Arc<dyn deno_node::NpmResolver>>,
   // Callbacks invoked when creating new instance of WebWorker
   pub create_web_worker_cb: Arc<ops::worker_host::CreateWebWorkerCb>,
@@ -215,6 +216,7 @@ impl Default for WorkerOptions {
       broadcast_channel: Default::default(),
       source_map_getter: Default::default(),
       root_cert_store_provider: Default::default(),
+      #[cfg(feature = "node")]
       npm_resolver: Default::default(),
       blob_store: Default::default(),
       extensions: Default::default(),
@@ -403,6 +405,7 @@ impl MainWorker {
       deno_fs::deno_fs::init_ops_and_esm::<PermissionsContainer>(
         options.fs.clone(),
       ),
+      #[cfg(feature = "node")]
       deno_node::deno_node::init_ops_and_esm::<PermissionsContainer>(
         options.npm_resolver,
         options.fs,
@@ -556,6 +559,7 @@ impl MainWorker {
       let mut state = op_state.borrow_mut();
       state.put(options.clone());
       if let Some(node_ipc_fd) = options.node_ipc_fd {
+        #[cfg(feature = "node")]
         state.put(deno_node::ChildPipeFd(node_ipc_fd));
       }
     }

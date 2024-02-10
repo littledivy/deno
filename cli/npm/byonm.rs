@@ -10,10 +10,10 @@ use deno_core::anyhow::bail;
 use deno_core::error::AnyError;
 use deno_core::serde_json;
 use deno_runtime::deno_fs::FileSystem;
-use deno_runtime::deno_node::NodePermissions;
-use deno_runtime::deno_node::NodeResolutionMode;
-use deno_runtime::deno_node::NpmResolver;
-use deno_runtime::deno_node::PackageJson;
+use deno_node::NodePermissions;
+use deno_node::NodeResolutionMode;
+use deno_node::NpmResolver;
+use deno_node::PackageJson;
 use deno_semver::package::PackageReq;
 
 use crate::args::package_json::get_local_package_json_version_reqs;

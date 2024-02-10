@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use deno_core::anyhow::bail;
 use deno_core::error::AnyError;
 use deno_npm::registry::parse_dep_entry_name_and_raw_version;
-use deno_runtime::deno_node::PackageJson;
+use deno_node::PackageJson;
 use deno_semver::package::PackageReq;
 use deno_semver::VersionReq;
 use deno_semver::VersionReqSpecifierParseError;

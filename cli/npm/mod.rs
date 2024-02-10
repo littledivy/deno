@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use deno_ast::ModuleSpecifier;
 use deno_core::error::AnyError;
-use deno_runtime::deno_node::NpmResolver;
+use deno_node::NpmResolver;
 use deno_semver::package::PackageReq;
 
 pub use self::byonm::ByonmCliNpmResolver;

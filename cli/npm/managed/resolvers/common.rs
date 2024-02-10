@@ -17,8 +17,8 @@ use deno_npm::NpmPackageCacheFolderId;
 use deno_npm::NpmPackageId;
 use deno_npm::NpmResolutionPackage;
 use deno_runtime::deno_fs::FileSystem;
-use deno_runtime::deno_node::NodePermissions;
-use deno_runtime::deno_node::NodeResolutionMode;
+use deno_node::NodePermissions;
+use deno_node::NodeResolutionMode;
 
 use super::super::cache::NpmCache;
 

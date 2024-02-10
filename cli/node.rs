@@ -7,9 +7,9 @@ use deno_ast::MediaType;
 use deno_ast::ModuleSpecifier;
 use deno_core::error::AnyError;
 use deno_runtime::deno_fs;
-use deno_runtime::deno_node::analyze::CjsAnalysis as ExtNodeCjsAnalysis;
-use deno_runtime::deno_node::analyze::CjsCodeAnalyzer;
-use deno_runtime::deno_node::analyze::NodeCodeTranslator;
+use deno_node::analyze::CjsAnalysis as ExtNodeCjsAnalysis;
+use deno_node::analyze::CjsCodeAnalyzer;
+use deno_node::analyze::NodeCodeTranslator;
 
 use crate::cache::NodeAnalysisCache;
 use crate::util::fs::canonicalize_path_maybe_not_exists;
