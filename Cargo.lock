@@ -1018,6 +1018,7 @@ dependencies = [
  "deno_cache_dir",
  "deno_config",
  "deno_core",
+ "deno_crypto",
  "deno_doc",
  "deno_emit",
  "deno_graph",

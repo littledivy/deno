@@ -10,6 +10,8 @@ repository.workspace = true
 description = "Provides the deno runtime library"
 
 [features]
+webcrypto = ["deno_crypto"]
+
 # "fake" feature that allows to generate docs on docs.rs
 docsrs = []
 # A feature that allows excluding `./js/99_main.js` from the exported extension.
@@ -80,7 +82,7 @@ deno_canvas.workspace = true
 deno_console.workspace = true
 deno_core.workspace = true
 deno_cron.workspace = true
-deno_crypto.workspace = true
+deno_crypto = { workspace = true, optional = true }
 deno_fetch.workspace = true
 deno_ffi.workspace = true
 deno_fs = { workspace = true, features = ["sync_fs"] }
