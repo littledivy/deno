@@ -888,8 +888,11 @@ To evaluate code in the shell:
 
 /// Main entry point for parsing deno's command line flags.
 pub fn flags_from_vec(args: Vec<String>) -> clap::error::Result<Flags> {
+  let instant = std::time::Instant::now();
   let mut app = clap_root();
+  println!("app build time: {:?}", instant.elapsed());
   let mut matches = app.try_get_matches_from_mut(&args)?;
+  println!("app try_get_matches_from_mut: {:?}", instant.elapsed());
 
   let mut flags = Flags::default();
 

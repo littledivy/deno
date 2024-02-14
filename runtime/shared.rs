@@ -32,7 +32,7 @@ extension!(runtime,
     deno_io,
     deno_fs
   ],
-  esm_entry_point = "ext:runtime/90_deno_ns.js",
+  esm_entry_point = "ext:runtime/99_main.js",
   esm = [
     dir "js",
     "01_errors.js",
@@ -51,15 +51,9 @@ extension!(runtime,
     "90_deno_ns.js",
     "98_global_scope_shared.js",
     "98_global_scope_window.js",
-    "98_global_scope_worker.js"
+    "98_global_scope_worker.js",
+    "99_main.js",
   ],
-  customizer = |ext: &mut Extension| {
-    #[cfg(not(feature = "exclude_runtime_main_js"))]
-    {
-      ext.esm_files.to_mut().push(ExtensionFileSource::new("ext:runtime_main/js/99_main.js", include_str!("./js/99_main.js")));
-      ext.esm_entry_point = Some("ext:runtime_main/js/99_main.js");
-    }
-  }
 );
 
 pub fn maybe_transpile_source(

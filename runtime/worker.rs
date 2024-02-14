@@ -309,6 +309,7 @@ impl MainWorker {
     permissions: PermissionsContainer,
     mut options: WorkerOptions,
   ) -> Self {
+    let start = std::time::Instant::now();
     deno_core::extension!(deno_permissions_worker,
       options = {
         permissions: PermissionsContainer,
@@ -441,20 +442,17 @@ impl MainWorker {
     assert!(cfg!(not(feature = "only_snapshotted_js_sources")), "'__runtime_js_sources' is incompatible with 'only_snapshotted_js_sources'.");
 
     for extension in &mut extensions {
-      if options.startup_snapshot.is_some() {
-        extension.js_files = std::borrow::Cow::Borrowed(&[]);
-        extension.esm_files = std::borrow::Cow::Borrowed(&[]);
-        extension.esm_entry_point = None;
-      }
-      #[cfg(not(feature = "only_snapshotted_js_sources"))]
-      {
-        use crate::shared::maybe_transpile_source;
-        for source in extension.esm_files.to_mut() {
-          maybe_transpile_source(source).unwrap();
-        }
-        for source in extension.js_files.to_mut() {
-          maybe_transpile_source(source).unwrap();
-        }
+      if options.startup_snapshot.is_none() {
+        // #[cfg(not(feature = "only_snapshotted_js_sources"))]
+        // {
+        //   use crate::shared::maybe_transpile_source;
+        //   for source in extension.esm_files.to_mut() {
+        //     maybe_transpile_source(source).unwrap();
+        //   }
+        //   for source in extension.js_files.to_mut() {
+        //     maybe_transpile_source(source).unwrap();
+        //   }
+        // }
       }
     }
 
@@ -472,8 +470,13 @@ impl MainWorker {
       }
     });
 
+    println!(
+      "main before runtime created in {}ms",
+      start.elapsed().as_millis()
+    );
     let mut js_runtime = JsRuntime::new(RuntimeOptions {
       module_loader: Some(options.module_loader.clone()),
+      skip_extension_sources: options.startup_snapshot.is_some(),
       startup_snapshot: options.startup_snapshot,
       create_params: options.create_params,
       source_map_getter: options.source_map_getter,
@@ -537,6 +540,8 @@ impl MainWorker {
       v8::Global::new(scope, bootstrap_fn)
     };
 
+    println!("main runtime created in {}ms", start.elapsed().as_millis());
+
     Self {
       js_runtime,
       should_break_on_first_statement: options.should_break_on_first_statement,
@@ -548,6 +553,7 @@ impl MainWorker {
   }
 
   pub fn bootstrap(&mut self, options: BootstrapOptions) {
+    let start = std::time::Instant::now();
     // Setup bootstrap options for ops.
     {
       let op_state = self.js_runtime.op_state();
@@ -559,11 +565,27 @@ impl MainWorker {
     }
 
     let scope = &mut self.js_runtime.handle_scope();
+
     let args = options.as_v8(scope);
     let bootstrap_fn = self.bootstrap_fn_global.take().unwrap();
     let bootstrap_fn = v8::Local::new(scope, bootstrap_fn);
     let undefined = v8::undefined(scope);
-    bootstrap_fn.call(scope, undefined.into(), &[args]).unwrap();
+
+    let tc_scope = &mut v8::TryCatch::new(scope);
+    if bootstrap_fn
+      .call(tc_scope, undefined.into(), &[args])
+      .is_none()
+    {
+      let exception_string = tc_scope
+        .stack_trace()
+        .or_else(|| tc_scope.exception())
+        .map(|value| value.to_rust_string_lossy(tc_scope))
+        .unwrap_or_else(|| "no stack trace".into());
+    }
+    println!(
+      "main runtime bootstrap completed in {}ms",
+      start.elapsed().as_millis()
+    );
   }
 
   /// See [JsRuntime::execute_script](deno_core::JsRuntime::execute_script)
