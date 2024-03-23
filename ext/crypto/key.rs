@@ -138,3 +138,39 @@ pub enum Algorithm {
   #[serde(rename = "HKDF")]
   Hkdf,
 }
+
+mod krypton {
+  use std::any::Any;
+  use std::rc::Rc;
+
+  // Internal representation of a key.
+  trait KeyData: Any {}
+
+  #[repr(u8)]
+  enum KeyType {
+    Rsa,
+    Rsa2,
+    Dsa,
+    Dh,
+    Ec,
+    Hmac,
+    Hkdf,
+    X25519,
+    Ed25519,
+    X448,
+    Ed448,
+  }
+
+  // A complex type that is a container for private/public key pairs.
+  // Similar to OpenSSL's EVP_PKEY.
+  struct Key {
+    ty: KeyType,
+    // Management.
+
+    // Key
+    keydata: Rc<dyn KeyData>,
+  }
+
+  impl Key {
+  }
+}
