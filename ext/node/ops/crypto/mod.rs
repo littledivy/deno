@@ -46,6 +46,7 @@ use rsa::RsaPublicKey;
 mod cipher;
 mod dh;
 mod digest;
+mod pkcs3;
 mod primes;
 pub mod x509;
 
@@ -1618,7 +1619,7 @@ pub fn op_node_create_public_key(
   #[buffer] key: &[u8],
   #[string] format: &str,
   #[string] type_: &str,
-) -> Result<AsymmetricKeyDetails, AnyError> {
+) -> Result<(ToJsBuffer, AsymmetricKeyDetails), AnyError> {
   let mut doc = None;
 
   let pk_info = if type_ != "spki" {
@@ -1629,8 +1630,7 @@ pub fn op_node_create_public_key(
   };
 
   let alg = pk_info.algorithm.oid;
-
-  match alg {
+  let details = match alg {
     RSA_ENCRYPTION_OID => {
       let public_key = rsa::pkcs1::RsaPublicKey::from_der(
         pk_info.subject_public_key.raw_bytes(),
@@ -1695,7 +1695,14 @@ pub fn op_node_create_public_key(
         named_curve: named_curve.to_string(),
       })
     }
-    DH_KEY_AGREEMENT_OID => Ok(AsymmetricKeyDetails::Dh),
+    DH_KEY_AGREEMENT_OID => {
+      pkcs3::DhParameter::try_from(pk_info.algorithm.parameters.unwrap())?;
+
+      Ok(AsymmetricKeyDetails::Dh)
+    }
     _ => Err(type_error("Unsupported algorithm")),
-  }
+  };
+
+  let der = pk_info.to_der()?.to_vec();
+  Ok((der.into(), details?))
 }
