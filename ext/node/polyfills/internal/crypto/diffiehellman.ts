@@ -1350,10 +1350,10 @@ export function diffieHellman(options: {
     );
   }
 
-  return op_node_dh_stateless(
+  return Buffer.from(op_node_dh_stateless(
     getKeyMaterial(privateKey),
     getKeyMaterial(publicKey),
-  );
+  ));
 }
 
 export default {

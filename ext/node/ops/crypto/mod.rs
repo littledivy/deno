@@ -952,15 +952,22 @@ pub fn op_node_dh_stateless(
   #[buffer] private_key: &[u8],
   #[buffer] public_key: &[u8],
 ) -> Result<ToJsBuffer, AnyError> {
-  let secret_key = elliptic_curve::SecretKey::from_pkcs1_der(private_key)?;
-  let public_key = elliptic_curve::PublicKey::from_sec1_bytes(public_key)?;
+  let pkinfo = pkcs8::PrivateKeyInfo::from_der(private_key)?;
 
-  let shared_secret = elliptic_curve::ecdh::diffie_hellman(
-    secret_key.to_nonzero_scalar(),
-    public_key.as_affine(),
-  );
+  let spki = spki::SubjectPublicKeyInfoRef::try_from(public_key)?;
+  let public_key = spki.subject_public_key;
+  let dh_params =
+    pkcs3::DhParameter::try_from(spki.algorithm.parameters.unwrap())?;
 
-  Ok(shared_secret.raw_secret_bytes().to_vec().into())
+  // OSIP - Octet-String-to-Integer primitive
+  let pubkey = BigUint::from_bytes_be(public_key.as_bytes().unwrap());
+
+  // Exponentiation (z = y^x mod p)
+  let prime = BigUint::from_bytes_be(dh_params.prime.as_bytes());
+  let private_key = BigUint::from_bytes_be(pkinfo.private_key.as_ref());
+  let shared_secret = pubkey.modpow(&private_key, &prime);
+
+  Ok(shared_secret.to_bytes_be().into())
 }
 
 #[op2(fast)]
@@ -1514,7 +1521,7 @@ pub fn op_node_create_private_key(
   #[buffer] key: &[u8],
   #[string] format: &str,
   #[string] type_: &str,
-) -> Result<AsymmetricKeyDetails, AnyError> {
+) -> Result<(ToJsBuffer, AsymmetricKeyDetails), AnyError> {
   use rsa::pkcs1::der::Decode;
 
   let doc = parse_private_key(key, format, type_)?;
@@ -1522,7 +1529,8 @@ pub fn op_node_create_private_key(
 
   let alg = pk_info.algorithm.oid;
 
-  match alg {
+  let key = doc.as_bytes().to_vec();
+  let details = match alg {
     RSA_ENCRYPTION_OID => {
       let private_key =
         rsa::pkcs1::RsaPrivateKey::from_der(pk_info.private_key)?;
@@ -1587,7 +1595,9 @@ pub fn op_node_create_private_key(
       })
     }
     _ => Err(type_error("Unsupported algorithm")),
-  }
+  };
+
+  Ok((key.into(), details?))
 }
 
 fn parse_public_key(

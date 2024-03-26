@@ -4,6 +4,7 @@ use super::primes::Prime;
 use num_bigint_dig::BigUint;
 use num_bigint_dig::RandBigInt;
 use num_traits::FromPrimitive;
+use spki::der::asn1;
 
 pub struct PublicKey(BigUint);
 
