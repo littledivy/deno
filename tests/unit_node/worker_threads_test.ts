@@ -414,3 +414,29 @@ Deno.test({
     mainPort.close();
   },
 });
+
+Deno.test({
+  name: "[node/worker_threads] Worker env",
+  async fn() {
+    const deferred = Promise.withResolvers<void>();
+    const worker = new workerThreads.Worker(
+      `
+      import { parentPort } from "node:worker_threads";
+      import process from "node:process";
+      parentPort.postMessage(process.env.TEST_ENV);
+      `,
+      {
+        eval: true,
+        env: { TEST_ENV: "test" },
+      },
+    );
+
+    worker.on("message", (data) => {
+      assertEquals(data, "test");
+      deferred.resolve();
+    });
+
+    await deferred.promise;
+    await worker.terminate();
+  },
+});
