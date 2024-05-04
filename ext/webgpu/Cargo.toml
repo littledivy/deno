@@ -26,6 +26,10 @@ raw-window-handle = { workspace = true }
 workspace = true
 features = ["trace", "replay", "serde", "strict_asserts", "wgsl", "gles"]
 
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies.metal]
+workspace = true
+default-features = false
+
 # We want the wgpu-core Metal backend on macOS and iOS.
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies.wgpu-core]
 workspace = true

@@ -18,9 +18,15 @@ rustflags = [
 ]
 
 [target.aarch64-apple-darwin]
-rustflags = [
+# rustflags = [
+#   "-C",
+#   "link-args=-fuse-ld=lld -weak_framework Metal -weak_framework MetalPerformanceShaders -weak_framework QuartzCore -weak_framework CoreGraphics",
+# ]
+rustflags  = [
+  "-Z",
+  "link-native-libraries=no",
   "-C",
-  "link-args=-fuse-ld=lld -weak_framework Metal -weak_framework MetalPerformanceShaders -weak_framework QuartzCore -weak_framework CoreGraphics",
+  "link-args=-fuse-ld=lld -L/Users/divy/gh/lzld -llzld -lSystem -lobjc -lc -lm"
 ]
 
 [target.'cfg(all())']
