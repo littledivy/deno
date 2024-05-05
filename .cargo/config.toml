@@ -26,7 +26,7 @@ rustflags  = [
   "-Z",
   "link-native-libraries=no",
   "-C",
-  "link-args=-fuse-ld=lld -L/Users/divy/gh/lzld -llzld -lSystem -lobjc -lc -lm"
+  "link-args=-fuse-ld=lld -L/Users/divy/gh/lzld -llzld -lobjc -lc"
 ]
 
 [target.'cfg(all())']
