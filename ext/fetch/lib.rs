@@ -114,6 +114,7 @@ deno_core::extension!(deno_fetch,
   ops = [
     op_fetch<FP>,
     op_fetch_send,
+    op_wrap_cppgc,
     op_fetch_response_upgrade,
     op_utf8_to_byte_string,
     op_fetch_custom_client<FP>,
@@ -471,6 +472,30 @@ pub struct FetchResponse {
   pub remote_addr_ip: Option<String>,
   pub remote_addr_port: Option<u16>,
   pub error: Option<String>,
+}
+
+struct ResponseCloser {
+  rid: ResourceId,
+  op_state: Rc<RefCell<OpState>>,
+}
+
+impl Drop for ResponseCloser {
+  fn drop(&mut self) {
+    let mut state = self.op_state.borrow_mut();
+    let _ = state.resource_table.take::<FetchResponseResource>(self.rid);
+  }
+}
+
+#[op2]
+#[cppgc]
+pub fn op_wrap_cppgc(
+  state: Rc<RefCell<OpState>>,
+  #[smi] response_rid: ResourceId,
+) -> ResponseCloser {
+  ResponseCloser {
+    rid: response_rid,
+    op_state: state.clone(),
+  }
 }
 
 #[op2(async)]

@@ -16,6 +16,7 @@ import {
   op_fetch_send,
   op_wasm_streaming_feed,
   op_wasm_streaming_set_url,
+  op_wrap_cppgc,
 } from "ext:core/ops";
 const {
   ArrayPrototypePush,
@@ -176,6 +177,7 @@ async function mainFetch(req, recursive, terminator) {
       core.tryClose(cancelHandleRid);
     }
   }
+
   // Re-throw any body errors
   if (resp.error) {
     throw new TypeError("body failed", { cause: new Error(resp.error) });
@@ -224,7 +226,7 @@ async function mainFetch(req, recursive, terminator) {
       );
     }
   }
-
+  const holder = op_wrap_cppgc(resp.responseRid);
   if (recursive) return response;
 
   if (response.urlList.length === 0) {
