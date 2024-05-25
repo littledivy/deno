@@ -331,9 +331,7 @@ pub fn main() {
   );
 
   let args: Vec<_> = env::args_os().collect();
-  let current_exe_path = current_exe().unwrap();
   let maybe_standalone = match standalone::extract_standalone(
-    &current_exe_path,
     Cow::Borrowed(&args),
   ) {
     Ok(standalone) => standalone,

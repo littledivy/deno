@@ -79,6 +79,7 @@ deno_task_shell = "=0.16.1"
 deno_terminal.workspace = true
 eszip = "=0.69.0"
 napi_sym.workspace = true
+libsui = { version = "0.0.0", path = '../../sui' }
 
 async-trait.workspace = true
 base32.workspace = true

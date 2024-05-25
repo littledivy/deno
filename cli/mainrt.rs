@@ -72,9 +72,8 @@ fn unwrap_or_exit<T>(result: Result<T, AnyError>) -> T {
 
 fn main() {
   let args: Vec<_> = env::args_os().collect();
-  let current_exe_path = current_exe().unwrap();
   let standalone =
-    standalone::extract_standalone(&current_exe_path, Cow::Owned(args));
+    standalone::extract_standalone(Cow::Owned(args));
   let future = async move {
     match standalone {
       Ok(Some(future)) => {

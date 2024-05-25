@@ -1125,6 +1125,7 @@ dependencies = [
  "junction",
  "lazy-regex",
  "libc",
+ "libsui",
  "libz-sys",
  "log",
  "lsp-types",
@@ -3876,6 +3877,14 @@ dependencies = [
  "cc",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "libsui"
+version = "0.0.0"
+dependencies = [
+ "cmake",
+ "libc",
 ]
 
 [[package]]
