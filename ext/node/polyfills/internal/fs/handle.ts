@@ -5,7 +5,7 @@
 
 import { EventEmitter } from "node:events";
 import { Buffer } from "node:buffer";
-import { promises, read, write } from "node:fs";
+import { promises, read, ReadStream, write, WriteStream } from "node:fs";
 import {
   BinaryOptionsArgument,
   FileOptionsArgument,
@@ -131,6 +131,14 @@ export class FileHandle extends EventEmitter {
         );
       });
     }
+  }
+
+  createReadStream(options) {
+    return new ReadStream(undefined, { ...options, fd: this });
+  }
+
+  createWriteStream(options) {
+    return new WriteStream(undefined, { ...options, fd: this });
   }
 
   close(): Promise<void> {
