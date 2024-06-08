@@ -20,25 +20,22 @@ pub enum Hash {
 }
 
 pub struct Context {
-  pub hash: Rc<RefCell<Hash>>,
+  pub hash: Rc<RefCell<Option<Hash>>>,
 }
 
 impl Context {
   pub fn new(algorithm: &str) -> Result<Self, AnyError> {
     Ok(Self {
-      hash: Rc::new(RefCell::new(Hash::new(algorithm)?)),
+      hash: Rc::new(RefCell::new(Some(Hash::new(algorithm)?))),
     })
   }
 
   pub fn update(&self, data: &[u8]) {
-    self.hash.borrow_mut().update(data);
+    self.hash.borrow_mut().as_mut().unwrap().update(data);
   }
 
-  pub fn digest(self) -> Result<Box<[u8]>, AnyError> {
-    let hash = Rc::try_unwrap(self.hash)
-      .map_err(|_| type_error("Hash context is already in use"))?;
-
-    let hash = hash.into_inner();
+  pub fn digest(&self) -> Result<Box<[u8]>, AnyError> {
+    let hash = self.hash.borrow_mut().take().unwrap();
     Ok(hash.digest_and_drop())
   }
 }

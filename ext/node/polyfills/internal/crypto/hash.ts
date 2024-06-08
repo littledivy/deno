@@ -86,9 +86,6 @@ export class Hash extends Transform {
       this.#context = op_node_create_hash(
         algorithm.toLowerCase(),
       );
-      if (this.#context === 0) {
-        throw new TypeError(`Unknown hash algorithm: ${algorithm}`);
-      }
     } else {
       this.#context = algorithm;
     }
@@ -105,9 +102,9 @@ export class Hash extends Transform {
    */
   update(data: string | ArrayBuffer, _encoding?: string): this {
     if (typeof data === "string") {
-      unwrapErr(op_node_hash_update_str(this.#context, data));
+      op_node_hash_update_str(this.#context, data);
     } else {
-      unwrapErr(op_node_hash_update(this.#context, coerceToBytes(data)));
+      op_node_hash_update(this.#context, coerceToBytes(data));
     }
 
     return this;
