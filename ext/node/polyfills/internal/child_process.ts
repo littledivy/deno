@@ -319,6 +319,7 @@ export class ChildProcess extends EventEmitter {
 
   unref() {
     this.#process.unref();
+    this.unrefIpc?.();
   }
 
   disconnect() {
@@ -1106,13 +1107,17 @@ export function setupChannel(target, ipc) {
         if (!target.connected || target.killed) {
           return;
         }
-        const msg = await op_node_ipc_read(ipc);
+	target.ongoingRead = op_node_ipc_read(ipc);
+	if (target.unrefed) {
+	  core.unrefOpPromise(target.ongoingRead);
+	}
+
+        const msg = await target.ongoingRead;
         if (msg == null) {
           // Channel closed.
           target.disconnect();
           return;
         }
-
         process.nextTick(handleMessage, msg);
       }
     } catch (err) {
@@ -1174,6 +1179,13 @@ export function setupChannel(target, ipc) {
     });
   };
   target.implementsDisconnect = true;
+
+  target.unrefIpc = function () {
+    target.unrefed = true;
+    if (target.ongoingRead) {
+      core.unrefOpPromise(target.ongoingRead);
+    }
+  };
 
   // Start reading messages from the channel.
   readLoop();
