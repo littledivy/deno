@@ -68,7 +68,7 @@ pub fn op_query_permission(
         Some(h) => Some(parse_host(h)?),
       }
       .as_ref(),
-    ),
+    )?,
     "env" => permissions.env.query(args.variable.as_deref()),
     "sys" => permissions
       .sys
@@ -103,7 +103,7 @@ pub fn op_revoke_permission(
         Some(h) => Some(parse_host(h)?),
       }
       .as_ref(),
-    ),
+    )?,
     "env" => permissions.env.revoke(args.variable.as_deref()),
     "sys" => permissions
       .sys
@@ -138,7 +138,7 @@ pub fn op_request_permission(
         Some(h) => Some(parse_host(h)?),
       }
       .as_ref(),
-    ),
+    )?,
     "env" => permissions.env.request(args.variable.as_deref()),
     "sys" => permissions
       .sys

@@ -16,7 +16,6 @@ use deno_core::url;
 use deno_core::url::Url;
 use deno_core::ModuleSpecifier;
 use deno_terminal::colors;
-use fqdn::fqdn;
 use fqdn::FQDN;
 use once_cell::sync::Lazy;
 use std::borrow::Cow;
@@ -694,8 +693,9 @@ impl Descriptor for WriteDescriptor {
 pub struct NetDescriptor(pub FQDN, pub Option<u16>);
 
 impl NetDescriptor {
-  fn new<T: AsRef<str>>(host: &&(T, Option<u16>)) -> Self {
-    NetDescriptor(fqdn!(host.0.as_ref()), host.1)
+  fn new<T: AsRef<str>>(host: &&(T, Option<u16>)) -> Result<Self, AnyError> {
+    let fqdn = host.0.as_ref().parse::<FQDN>()?;
+    Ok(NetDescriptor(fqdn, host.1))
   }
 }
 
@@ -741,7 +741,8 @@ impl FromStr for NetDescriptor {
       .ok_or(url::ParseError::EmptyHost)?
       .to_string();
 
-    Ok(NetDescriptor(fqdn!(&hostname), url.port()))
+    let fqdn = hostname.parse::<FQDN>()?;
+    Ok(NetDescriptor(fqdn, url.port()))
   }
 }
 
@@ -1108,25 +1109,32 @@ impl UnaryPermission<NetDescriptor> {
   pub fn query<T: AsRef<str>>(
     &self,
     host: Option<&(T, Option<u16>)>,
-  ) -> PermissionState {
-    self.query_desc(
-      host.map(|h| NetDescriptor::new(&h)).as_ref(),
+  ) -> Result<PermissionState, AnyError> {
+    Ok(self.query_desc(
+      host.map(|h| NetDescriptor::new(&h)).transpose()?.as_ref(),
       AllowPartial::TreatAsPartialGranted,
-    )
+    ))
   }
 
   pub fn request<T: AsRef<str>>(
     &mut self,
     host: Option<&(T, Option<u16>)>,
-  ) -> PermissionState {
-    self.request_desc(host.map(|h| NetDescriptor::new(&h)).as_ref(), || None)
+  ) -> Result<PermissionState, AnyError> {
+    Ok(self.request_desc(
+      host.map(|h| NetDescriptor::new(&h)).transpose()?.as_ref(),
+      || None,
+    ))
   }
 
   pub fn revoke<T: AsRef<str>>(
     &mut self,
     host: Option<&(T, Option<u16>)>,
-  ) -> PermissionState {
-    self.revoke_desc(host.map(|h| NetDescriptor::new(&h)).as_ref())
+  ) -> Result<PermissionState, AnyError> {
+    Ok(
+      self.revoke_desc(
+        host.map(|h| NetDescriptor::new(&h)).transpose()?.as_ref(),
+      ),
+    )
   }
 
   pub fn check<T: AsRef<str>>(
@@ -1135,7 +1143,7 @@ impl UnaryPermission<NetDescriptor> {
     api_name: Option<&str>,
   ) -> Result<(), AnyError> {
     skip_check_if_is_permission_fully_granted!(self);
-    self.check_desc(Some(&NetDescriptor::new(&host)), false, api_name, || None)
+    self.check_desc(Some(&NetDescriptor::new(&host)?), false, api_name, || None)
   }
 
   pub fn check_url(
@@ -1153,7 +1161,7 @@ impl UnaryPermission<NetDescriptor> {
       None => hostname.clone(),
       Some(port) => format!("{hostname}:{port}"),
     };
-    self.check_desc(Some(&NetDescriptor::new(&host)), false, api_name, || {
+    self.check_desc(Some(&NetDescriptor::new(&host)?), false, api_name, || {
       Some(format!("\"{}\"", display_host))
     })
   }

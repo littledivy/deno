@@ -1272,3 +1272,10 @@ Deno.test(
     // calling [Symbol.dispose] after manual close is a no-op
   },
 );
+
+Deno.test(
+  { permissions: { net: false } },
+  function invalidFQDN() {
+    assertThrows(() => Deno.connect({ hostname: "foo@bar.com.", port: 1 }));
+  },
+);
