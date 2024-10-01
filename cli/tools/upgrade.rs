@@ -40,6 +40,8 @@ const DL_RELEASE_URL: &str = "https://dl.deno.land/release";
 
 pub static ARCHIVE_NAME: Lazy<String> =
   Lazy::new(|| format!("deno-{}.zip", env!("TARGET")));
+pub static SHASUM_NAME: Lazy<String> =
+  Lazy::new(|| format!("deno-{}.sha256sum", env!("TARGET")));
 
 // How often query server for new version. In hours.
 const UPGRADE_CHECK_INTERVAL: i64 = 24;
@@ -535,6 +537,7 @@ pub async fn upgrade(
   let download_url = get_download_url(
     &selected_version_to_upgrade.version_or_hash,
     requested_version.release_channel(),
+    &ARCHIVE_NAME,
   )?;
   log::info!("{}", colors::gray(format!("Downloading {}", &download_url)));
   let Some(archive_data) = download_package(&client, download_url).await?
@@ -551,7 +554,6 @@ pub async fn upgrade(
     ))
   );
 
-  let temp_dir = tempfile::TempDir::new()?;
   let new_exe_path = archive::unpack_into_dir(archive::UnpackArgs {
     exe_name: "deno",
     archive_name: &ARCHIVE_NAME,
@@ -559,6 +561,32 @@ pub async fn upgrade(
     is_windows: cfg!(windows),
     dest_path: temp_dir.path(),
   })?;
+
+  let checksum_url = get_download_url(
+    &selected_version_to_upgrade.version_or_hash,
+    requested_version.release_channel(),
+    &SHASUM_NAME,
+  )?;
+
+  use sha2::Digest;
+  if let Some(shasum_data) = download_package(&client, checksum_url).await? {
+    // Parse the checksum file
+    let shasum_str = std::str::from_utf8(&shasum_data)?;
+    let shasum = shasum_str.split_whitespace().next().unwrap();
+
+    // Check the Checksum
+    let exe = fs::read(&new_exe_path)?;
+    let new_exe_shasum = faster_hex::hex_string(&sha2::Sha256::digest(&exe));
+
+    if new_exe_shasum != shasum {
+      log::error!("Checksum verification failed, aborting");
+      std::process::exit(1)
+    }
+  } else {
+    log::warn!("Checksum could not be found, skipping verification");
+  }
+
+
   fs::set_permissions(&new_exe_path, permissions)?;
   check_exe(&new_exe_path)?;
 
@@ -880,19 +908,20 @@ fn base_upgrade_url() -> Cow<'static, str> {
 fn get_download_url(
   version: &str,
   release_channel: ReleaseChannel,
+  name: &str,
 ) -> Result<Url, AnyError> {
   let download_url = match release_channel {
     ReleaseChannel::Stable => {
-      format!("{}/download/v{}/{}", RELEASE_URL, version, *ARCHIVE_NAME)
+      format!("{}/download/v{}/{}", RELEASE_URL, version, name)
     }
     ReleaseChannel::Rc => {
-      format!("{}/v{}/{}", DL_RELEASE_URL, version, *ARCHIVE_NAME)
+      format!("{}/v{}/{}", DL_RELEASE_URL, version, name)
     }
     ReleaseChannel::Canary => {
-      format!("{}/{}/{}", CANARY_URL, version, *ARCHIVE_NAME)
+      format!("{}/{}/{}", CANARY_URL, version, name)
     }
     ReleaseChannel::Lts => {
-      format!("{}/v{}/{}", DL_RELEASE_URL, version, *ARCHIVE_NAME)
+      format!("{}/v{}/{}", DL_RELEASE_URL, version, name)
     }
   };
 
