@@ -162,6 +162,7 @@ import vm from "node:vm";
 import workerThreads from "node:worker_threads";
 import wasi from "node:wasi";
 import zlib from "node:zlib";
+import sqlite from "node:sqlite";
 
 const nativeModuleExports = ObjectCreate(null);
 const builtinModules = [];
@@ -254,6 +255,7 @@ function setupBuiltinModules() {
     "readline/promises": readlinePromises,
     repl,
     stream,
+    sqlite,
     "stream/consumers": streamConsumers,
     "stream/promises": streamPromises,
     "stream/web": streamWeb,
