@@ -49,7 +49,9 @@ pub fn op_sqlite_exec_noargs(
   #[cppgc] db: &DatabaseSync,
   #[string] sql: &str,
 ) -> Result<(), AnyError> {
-  db.execute(sql, [])?;
+  let mut stmt = db.prepare_cached(sql)?;
+  stmt.execute([])?;
+
   Ok(())
 }
 
@@ -62,6 +64,8 @@ pub fn op_sqlite_exec<'s>(
 ) -> Result<(), AnyError> {
   let mut stmt = db.prepare_cached(sql)?;
   bind(&mut stmt, scope, params)?;
+
+  stmt.execute([])?;
 
   Ok(())
 }
@@ -196,7 +200,10 @@ pub fn op_sqlite_get<'a>(
       .unwrap()
       .into();
       result.set(scope, name, value);
+      
     }
+
+    libsqlite3_sys::sqlite3_reset(raw);
   }
 
   Ok(result)
