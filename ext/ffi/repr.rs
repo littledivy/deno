@@ -3,7 +3,9 @@
 use crate::FfiPermissions;
 use deno_core::op2;
 use deno_core::v8;
+use deno_core::GarbageCollected;
 use deno_core::OpState;
+use deno_permissions::PermissionsContainer;
 use std::ffi::c_char;
 use std::ffi::c_void;
 use std::ffi::CStr;
@@ -47,6 +49,335 @@ pub enum ReprError {
   InvalidPointer,
   #[error(transparent)]
   Permission(#[from] deno_permissions::PermissionCheckError),
+}
+
+pub struct UnsafePointerView {
+  ptr: *const c_void,
+}
+
+impl GarbageCollected for UnsafePointerView {}
+
+#[op2]
+impl UnsafePointerView {
+  #[constructor]
+  #[cppgc]
+  fn new(ptr: *const c_void) -> UnsafePointerView {
+    UnsafePointerView { ptr }
+  }
+
+  #[fast]
+  fn get_bool(
+    &self,
+    state: &mut OpState,
+    #[number] offset: isize,
+  ) -> Result<bool, ReprError> {
+    let permissions = state.borrow_mut::<PermissionsContainer>();
+    permissions.check_partial_no_path()?;
+
+    if self.ptr.is_null() {
+      return Err(ReprError::InvalidOffset);
+    }
+
+    // SAFETY: ptr and offset are user provided.
+    Ok(unsafe {
+      ptr::read_unaligned::<bool>(self.ptr.offset(offset) as *const bool)
+    })
+  }
+
+  #[fast]
+  fn get_uint8(
+    &self,
+    state: &mut OpState,
+    #[number] offset: isize,
+  ) -> Result<u32, ReprError> {
+    let permissions = state.borrow_mut::<PermissionsContainer>();
+    permissions.check_partial_no_path()?;
+
+    if self.ptr.is_null() {
+      return Err(ReprError::InvalidOffset);
+    }
+
+    // SAFETY: ptr and offset are user provided.
+    Ok(unsafe {
+      ptr::read_unaligned::<u8>(self.ptr.offset(offset) as *const u8) as u32
+    })
+  }
+
+  #[fast]
+  fn get_int8(
+    &self,
+    state: &mut OpState,
+    #[number] offset: isize,
+  ) -> Result<i32, ReprError> {
+    let permissions = state.borrow_mut::<PermissionsContainer>();
+    permissions.check_partial_no_path()?;
+
+    if self.ptr.is_null() {
+      return Err(ReprError::InvalidOffset);
+    }
+
+    // SAFETY: ptr and offset are user provided.
+    Ok(unsafe {
+      ptr::read_unaligned::<i8>(self.ptr.offset(offset) as *const i8) as i32
+    })
+  }
+
+  #[fast]
+  fn get_uint16(
+    &self,
+    state: &mut OpState,
+    #[number] offset: isize,
+  ) -> Result<u32, ReprError> {
+    let permissions = state.borrow_mut::<PermissionsContainer>();
+    permissions.check_partial_no_path()?;
+
+    if self.ptr.is_null() {
+      return Err(ReprError::InvalidOffset);
+    }
+
+    // SAFETY: ptr and offset are user provided.
+    Ok(unsafe {
+      ptr::read_unaligned::<u16>(self.ptr.offset(offset) as *const u16) as u32
+    })
+  }
+
+  #[fast]
+  fn get_int16(
+    &self,
+    state: &mut OpState,
+    #[number] offset: isize,
+  ) -> Result<i32, ReprError> {
+    let permissions = state.borrow_mut::<PermissionsContainer>();
+    permissions.check_partial_no_path()?;
+
+    if self.ptr.is_null() {
+      return Err(ReprError::InvalidOffset);
+    }
+
+    // SAFETY: ptr and offset are user provided.
+    Ok(unsafe {
+      ptr::read_unaligned::<i16>(self.ptr.offset(offset) as *const i16) as i32
+    })
+  }
+
+  #[fast]
+  fn get_uint32(
+    &self,
+    state: &mut OpState,
+    #[number] offset: isize,
+  ) -> Result<u32, ReprError> {
+    let permissions = state.borrow_mut::<PermissionsContainer>();
+    permissions.check_partial_no_path()?;
+
+    if self.ptr.is_null() {
+      return Err(ReprError::InvalidOffset);
+    }
+
+    // SAFETY: ptr and offset are user provided.
+    Ok(unsafe {
+      ptr::read_unaligned::<u32>(self.ptr.offset(offset) as *const u32)
+    })
+  }
+
+  #[fast]
+  fn get_int32(
+    &self,
+    state: &mut OpState,
+    #[number] offset: isize,
+  ) -> Result<i32, ReprError> {
+    let permissions = state.borrow_mut::<PermissionsContainer>();
+    permissions.check_partial_no_path()?;
+
+    if self.ptr.is_null() {
+      return Err(ReprError::InvalidOffset);
+    }
+
+    // SAFETY: ptr and offset are user provided.
+    Ok(unsafe {
+      ptr::read_unaligned::<i32>(self.ptr.offset(offset) as *const i32)
+    })
+  }
+
+  #[fast]
+  #[bigint]
+  fn get_big_uint64(
+    &self,
+    state: &mut OpState,
+    #[number] offset: isize,
+  ) -> Result<u64, ReprError> {
+    let permissions = state.borrow_mut::<PermissionsContainer>();
+    permissions.check_partial_no_path()?;
+
+    if self.ptr.is_null() {
+      return Err(ReprError::InvalidOffset);
+    }
+
+    let value =
+    // SAFETY: ptr and offset are user provided.
+      unsafe { ptr::read_unaligned::<u64>(self.ptr.offset(offset) as *const u64) };
+
+    Ok(value)
+  }
+
+  #[fast]
+  #[bigint]
+  fn get_big_int64(
+    &self,
+    state: &mut OpState,
+    #[number] offset: isize,
+  ) -> Result<i64, ReprError> {
+    let permissions = state.borrow_mut::<PermissionsContainer>();
+    permissions.check_partial_no_path()?;
+
+    if self.ptr.is_null() {
+      return Err(ReprError::InvalidOffset);
+    }
+
+    let value =
+    // SAFETY: ptr and offset are user provided.
+      unsafe { ptr::read_unaligned::<i64>(self.ptr.offset(offset) as *const i64) };
+    Ok(value)
+  }
+
+  #[fast]
+  fn get_float32(
+    &self,
+    state: &mut OpState,
+    #[number] offset: isize,
+  ) -> Result<f32, ReprError> {
+    let permissions = state.borrow_mut::<PermissionsContainer>();
+    permissions.check_partial_no_path()?;
+
+    if self.ptr.is_null() {
+      return Err(ReprError::InvalidOffset);
+    }
+
+    // SAFETY: ptr and offset are user provided.
+    Ok(unsafe {
+      ptr::read_unaligned::<f32>(self.ptr.offset(offset) as *const f32)
+    })
+  }
+
+  #[fast]
+  fn get_float64(
+    &self,
+    state: &mut OpState,
+    #[number] offset: isize,
+  ) -> Result<f64, ReprError> {
+    let permissions = state.borrow_mut::<PermissionsContainer>();
+    permissions.check_partial_no_path()?;
+
+    if self.ptr.is_null() {
+      return Err(ReprError::InvalidOffset);
+    }
+
+    // SAFETY: ptr and offset are user provided.
+    Ok(unsafe {
+      ptr::read_unaligned::<f64>(self.ptr.offset(offset) as *const f64)
+    })
+  }
+
+  #[fast]
+  fn get_pointer(
+    &self,
+    state: &mut OpState,
+    #[number] offset: isize,
+  ) -> Result<*mut c_void, ReprError> {
+    let permissions = state.borrow_mut::<PermissionsContainer>();
+    permissions.check_partial_no_path()?;
+
+    if self.ptr.is_null() {
+      return Err(ReprError::InvalidOffset);
+    }
+
+    // SAFETY: ptr and offset are user provided.
+    Ok(unsafe {
+      ptr::read_unaligned::<*mut c_void>(
+        self.ptr.offset(offset) as *const *mut c_void
+      )
+    })
+  }
+
+  #[static_method]
+  fn get_c_string<'scope>(
+    scope: &mut v8::HandleScope<'scope>,
+    ptr: *mut c_void,
+    state: &mut OpState,
+    #[number] offset: isize,
+  ) -> Result<v8::Local<'scope, v8::String>, ReprError> {
+    let permissions = state.borrow_mut::<PermissionsContainer>();
+    permissions.check_partial_no_path()?;
+
+    if ptr.is_null() {
+      return Err(ReprError::InvalidOffset);
+    }
+
+    let cstr =
+    // SAFETY: Pointer and offset are user provided.
+      unsafe { CStr::from_ptr(ptr.offset(offset) as *const c_char) }.to_bytes();
+    let value =
+      v8::String::new_from_utf8(scope, cstr, v8::NewStringType::Normal)
+        .ok_or_else(|| ReprError::CStringTooLong)?;
+    Ok(value)
+  }
+
+  #[static_method]
+  fn get_array_buffer<'scope>(
+    scope: &mut v8::HandleScope<'scope>,
+    ptr: *mut c_void,
+    state: &mut OpState,
+    #[number] offset: isize,
+    #[number] len: usize,
+  ) -> Result<v8::Local<'scope, v8::ArrayBuffer>, ReprError> {
+    let permissions = state.borrow_mut::<PermissionsContainer>();
+    permissions.check_partial_no_path()?;
+
+    if ptr.is_null() {
+      return Err(ReprError::InvalidOffset);
+    }
+
+    // SAFETY: Trust the user to have provided a real pointer, offset, and a valid matching size to it. Since this is a foreign pointer, we should not do any deletion.
+    let backing_store = unsafe {
+      v8::ArrayBuffer::new_backing_store_from_ptr(
+        ptr.offset(offset),
+        len,
+        noop_deleter_callback,
+        ptr::null_mut(),
+      )
+    }
+    .make_shared();
+    let array_buffer =
+      v8::ArrayBuffer::with_backing_store(scope, &backing_store);
+    Ok(array_buffer)
+  }
+
+  #[static_method]
+  fn copy_into(
+    ptr: *mut c_void,
+    state: &mut OpState,
+    #[number] offset: isize,
+    #[anybuffer] dst: &mut [u8],
+    #[number] len: usize,
+  ) -> Result<(), ReprError> {
+    let permissions = state.borrow_mut::<PermissionsContainer>();
+    permissions.check_partial_no_path()?;
+
+    if ptr.is_null() {
+      return Err(ReprError::InvalidOffset);
+    } else if dst.len() < len {
+      return Err(ReprError::DestinationLengthTooShort);
+    }
+
+    // SAFETY: src and offset are user defined.
+    // dest is properly aligned and is valid for writes of len * size_of::<T>() bytes.
+    unsafe {
+      ptr::copy::<u8>(ptr.offset(offset) as *const u8, dst.as_mut_ptr(), len)
+    };
+    Ok(())
+  }
+
+  // todo(this PR): method and static methods with same name
+  // todo(this PR): support #[number] Option<isize>
 }
 
 #[op2(fast, stack_trace)]
@@ -155,353 +486,4 @@ where
   permissions.check_partial_no_path()?;
 
   Ok(ptr as usize)
-}
-
-#[op2(stack_trace)]
-pub fn op_ffi_get_buf<FP, 'scope>(
-  scope: &mut v8::HandleScope<'scope>,
-  state: &mut OpState,
-  ptr: *mut c_void,
-  #[number] offset: isize,
-  #[number] len: usize,
-) -> Result<v8::Local<'scope, v8::ArrayBuffer>, ReprError>
-where
-  FP: FfiPermissions + 'static,
-{
-  let permissions = state.borrow_mut::<FP>();
-  permissions.check_partial_no_path()?;
-
-  if ptr.is_null() {
-    return Err(ReprError::InvalidArrayBuffer);
-  }
-
-  // SAFETY: Trust the user to have provided a real pointer, offset, and a valid matching size to it. Since this is a foreign pointer, we should not do any deletion.
-  let backing_store = unsafe {
-    v8::ArrayBuffer::new_backing_store_from_ptr(
-      ptr.offset(offset),
-      len,
-      noop_deleter_callback,
-      ptr::null_mut(),
-    )
-  }
-  .make_shared();
-  let array_buffer = v8::ArrayBuffer::with_backing_store(scope, &backing_store);
-  Ok(array_buffer)
-}
-
-#[op2(stack_trace)]
-pub fn op_ffi_buf_copy_into<FP>(
-  state: &mut OpState,
-  src: *mut c_void,
-  #[number] offset: isize,
-  #[anybuffer] dst: &mut [u8],
-  #[number] len: usize,
-) -> Result<(), ReprError>
-where
-  FP: FfiPermissions + 'static,
-{
-  let permissions = state.borrow_mut::<FP>();
-  permissions.check_partial_no_path()?;
-
-  if src.is_null() {
-    Err(ReprError::InvalidArrayBuffer)
-  } else if dst.len() < len {
-    Err(ReprError::DestinationLengthTooShort)
-  } else {
-    let src = src as *const c_void;
-
-    // SAFETY: src and offset are user defined.
-    // dest is properly aligned and is valid for writes of len * size_of::<T>() bytes.
-    unsafe {
-      ptr::copy::<u8>(src.offset(offset) as *const u8, dst.as_mut_ptr(), len)
-    };
-    Ok(())
-  }
-}
-
-#[op2(stack_trace)]
-pub fn op_ffi_cstr_read<FP, 'scope>(
-  scope: &mut v8::HandleScope<'scope>,
-  state: &mut OpState,
-  ptr: *mut c_void,
-  #[number] offset: isize,
-) -> Result<v8::Local<'scope, v8::String>, ReprError>
-where
-  FP: FfiPermissions + 'static,
-{
-  let permissions = state.borrow_mut::<FP>();
-  permissions.check_partial_no_path()?;
-
-  if ptr.is_null() {
-    return Err(ReprError::InvalidCString);
-  }
-
-  let cstr =
-  // SAFETY: Pointer and offset are user provided.
-    unsafe { CStr::from_ptr(ptr.offset(offset) as *const c_char) }.to_bytes();
-  let value = v8::String::new_from_utf8(scope, cstr, v8::NewStringType::Normal)
-    .ok_or_else(|| ReprError::CStringTooLong)?;
-  Ok(value)
-}
-
-#[op2(fast, stack_trace)]
-pub fn op_ffi_read_bool<FP>(
-  state: &mut OpState,
-  ptr: *mut c_void,
-  #[number] offset: isize,
-) -> Result<bool, ReprError>
-where
-  FP: FfiPermissions + 'static,
-{
-  let permissions = state.borrow_mut::<FP>();
-  permissions.check_partial_no_path()?;
-
-  if ptr.is_null() {
-    return Err(ReprError::InvalidBool);
-  }
-
-  // SAFETY: ptr and offset are user provided.
-  Ok(unsafe { ptr::read_unaligned::<bool>(ptr.offset(offset) as *const bool) })
-}
-
-#[op2(fast, stack_trace)]
-pub fn op_ffi_read_u8<FP>(
-  state: &mut OpState,
-  ptr: *mut c_void,
-  #[number] offset: isize,
-) -> Result<u32, ReprError>
-where
-  FP: FfiPermissions + 'static,
-{
-  let permissions = state.borrow_mut::<FP>();
-  permissions.check_partial_no_path()?;
-
-  if ptr.is_null() {
-    return Err(ReprError::InvalidU8);
-  }
-
-  // SAFETY: ptr and offset are user provided.
-  Ok(unsafe {
-    ptr::read_unaligned::<u8>(ptr.offset(offset) as *const u8) as u32
-  })
-}
-
-#[op2(fast, stack_trace)]
-pub fn op_ffi_read_i8<FP>(
-  state: &mut OpState,
-  ptr: *mut c_void,
-  #[number] offset: isize,
-) -> Result<i32, ReprError>
-where
-  FP: FfiPermissions + 'static,
-{
-  let permissions = state.borrow_mut::<FP>();
-  permissions.check_partial_no_path()?;
-
-  if ptr.is_null() {
-    return Err(ReprError::InvalidI8);
-  }
-
-  // SAFETY: ptr and offset are user provided.
-  Ok(unsafe {
-    ptr::read_unaligned::<i8>(ptr.offset(offset) as *const i8) as i32
-  })
-}
-
-#[op2(fast, stack_trace)]
-pub fn op_ffi_read_u16<FP>(
-  state: &mut OpState,
-  ptr: *mut c_void,
-  #[number] offset: isize,
-) -> Result<u32, ReprError>
-where
-  FP: FfiPermissions + 'static,
-{
-  let permissions = state.borrow_mut::<FP>();
-  permissions.check_partial_no_path()?;
-
-  if ptr.is_null() {
-    return Err(ReprError::InvalidU16);
-  }
-
-  // SAFETY: ptr and offset are user provided.
-  Ok(unsafe {
-    ptr::read_unaligned::<u16>(ptr.offset(offset) as *const u16) as u32
-  })
-}
-
-#[op2(fast, stack_trace)]
-pub fn op_ffi_read_i16<FP>(
-  state: &mut OpState,
-  ptr: *mut c_void,
-  #[number] offset: isize,
-) -> Result<i32, ReprError>
-where
-  FP: FfiPermissions + 'static,
-{
-  let permissions = state.borrow_mut::<FP>();
-  permissions.check_partial_no_path()?;
-
-  if ptr.is_null() {
-    return Err(ReprError::InvalidI16);
-  }
-
-  // SAFETY: ptr and offset are user provided.
-  Ok(unsafe {
-    ptr::read_unaligned::<i16>(ptr.offset(offset) as *const i16) as i32
-  })
-}
-
-#[op2(fast, stack_trace)]
-pub fn op_ffi_read_u32<FP>(
-  state: &mut OpState,
-  ptr: *mut c_void,
-  #[number] offset: isize,
-) -> Result<u32, ReprError>
-where
-  FP: FfiPermissions + 'static,
-{
-  let permissions = state.borrow_mut::<FP>();
-  permissions.check_partial_no_path()?;
-
-  if ptr.is_null() {
-    return Err(ReprError::InvalidU32);
-  }
-
-  // SAFETY: ptr and offset are user provided.
-  Ok(unsafe { ptr::read_unaligned::<u32>(ptr.offset(offset) as *const u32) })
-}
-
-#[op2(fast, stack_trace)]
-pub fn op_ffi_read_i32<FP>(
-  state: &mut OpState,
-  ptr: *mut c_void,
-  #[number] offset: isize,
-) -> Result<i32, ReprError>
-where
-  FP: FfiPermissions + 'static,
-{
-  let permissions = state.borrow_mut::<FP>();
-  permissions.check_partial_no_path()?;
-
-  if ptr.is_null() {
-    return Err(ReprError::InvalidI32);
-  }
-
-  // SAFETY: ptr and offset are user provided.
-  Ok(unsafe { ptr::read_unaligned::<i32>(ptr.offset(offset) as *const i32) })
-}
-
-#[op2(fast, stack_trace)]
-#[bigint]
-pub fn op_ffi_read_u64<FP>(
-  state: &mut OpState,
-  ptr: *mut c_void,
-  // Note: The representation of 64-bit integers is function-wide. We cannot
-  // choose to take this parameter as a number while returning a bigint.
-  #[bigint] offset: isize,
-) -> Result<u64, ReprError>
-where
-  FP: FfiPermissions + 'static,
-{
-  let permissions = state.borrow_mut::<FP>();
-  permissions.check_partial_no_path()?;
-
-  if ptr.is_null() {
-    return Err(ReprError::InvalidU64);
-  }
-
-  let value =
-  // SAFETY: ptr and offset are user provided.
-    unsafe { ptr::read_unaligned::<u64>(ptr.offset(offset) as *const u64) };
-
-  Ok(value)
-}
-
-#[op2(fast, stack_trace)]
-#[bigint]
-pub fn op_ffi_read_i64<FP>(
-  state: &mut OpState,
-  ptr: *mut c_void,
-  // Note: The representation of 64-bit integers is function-wide. We cannot
-  // choose to take this parameter as a number while returning a bigint.
-  #[bigint] offset: isize,
-) -> Result<i64, ReprError>
-where
-  FP: FfiPermissions + 'static,
-{
-  let permissions = state.borrow_mut::<FP>();
-  permissions.check_partial_no_path()?;
-
-  if ptr.is_null() {
-    return Err(ReprError::InvalidI64);
-  }
-
-  let value =
-  // SAFETY: ptr and offset are user provided.
-    unsafe { ptr::read_unaligned::<i64>(ptr.offset(offset) as *const i64) };
-  // SAFETY: Length and alignment of out slice were asserted to be correct.
-  Ok(value)
-}
-
-#[op2(fast, stack_trace)]
-pub fn op_ffi_read_f32<FP>(
-  state: &mut OpState,
-  ptr: *mut c_void,
-  #[number] offset: isize,
-) -> Result<f32, ReprError>
-where
-  FP: FfiPermissions + 'static,
-{
-  let permissions = state.borrow_mut::<FP>();
-  permissions.check_partial_no_path()?;
-
-  if ptr.is_null() {
-    return Err(ReprError::InvalidF32);
-  }
-
-  // SAFETY: ptr and offset are user provided.
-  Ok(unsafe { ptr::read_unaligned::<f32>(ptr.offset(offset) as *const f32) })
-}
-
-#[op2(fast, stack_trace)]
-pub fn op_ffi_read_f64<FP>(
-  state: &mut OpState,
-  ptr: *mut c_void,
-  #[number] offset: isize,
-) -> Result<f64, ReprError>
-where
-  FP: FfiPermissions + 'static,
-{
-  let permissions = state.borrow_mut::<FP>();
-  permissions.check_partial_no_path()?;
-
-  if ptr.is_null() {
-    return Err(ReprError::InvalidF64);
-  }
-
-  // SAFETY: ptr and offset are user provided.
-  Ok(unsafe { ptr::read_unaligned::<f64>(ptr.offset(offset) as *const f64) })
-}
-
-#[op2(fast, stack_trace)]
-pub fn op_ffi_read_ptr<FP>(
-  state: &mut OpState,
-  ptr: *mut c_void,
-  #[number] offset: isize,
-) -> Result<*mut c_void, ReprError>
-where
-  FP: FfiPermissions + 'static,
-{
-  let permissions = state.borrow_mut::<FP>();
-  permissions.check_partial_no_path()?;
-
-  if ptr.is_null() {
-    return Err(ReprError::InvalidPointer);
-  }
-
-  // SAFETY: ptr and offset are user provided.
-  Ok(unsafe {
-    ptr::read_unaligned::<*mut c_void>(ptr.offset(offset) as *const *mut c_void)
-  })
 }
