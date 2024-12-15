@@ -431,7 +431,9 @@ deno_core::extension!(deno_node,
     ops::inspector::op_inspector_enabled,
   ],
   objects = [
-    ops::perf_hooks::EldHistogram
+    ops::perf_hooks::EldHistogram,
+    ops::wasi::Context,
+    ops::wasi::WASI
   ],
   esm_entry_point = "ext:deno_node/02_init.js",
   esm = [
