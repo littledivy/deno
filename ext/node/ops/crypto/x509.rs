@@ -4,6 +4,7 @@ use std::ops::Deref;
 
 use deno_core::op2;
 use digest::Digest;
+use serde::Deserialize;
 use x509_parser::der_parser::asn1_rs::Any;
 use x509_parser::der_parser::asn1_rs::Tag;
 use x509_parser::der_parser::oid::Oid;
@@ -33,7 +34,7 @@ pub(crate) struct Certificate {
 impl deno_core::GarbageCollected for Certificate {}
 
 impl Certificate {
-  fn fingerprint<D: Digest>(&self) -> Option<String> {
+  fn fingerprint_digest<D: Digest>(&self) -> Option<String> {
     if let CertificateSources::Pem(pem) = self.inner.backing_cart().as_ref() {
       let mut hasher = D::new();
       hasher.update(&pem.contents);
@@ -61,17 +62,52 @@ impl<'a> Deref for CertificateView<'a> {
 
 deno_error::js_error_wrapper!(X509Error, JsX509Error, "Error");
 
-#[op2]
-#[cppgc]
-pub fn op_node_x509_parse(
-  #[buffer] buf: &[u8],
-) -> Result<Certificate, JsX509Error> {
-  let source = match pem::parse_x509_pem(buf) {
-    Ok((_, pem)) => CertificateSources::Pem(pem),
-    Err(_) => CertificateSources::Der(buf.to_vec().into_boxed_slice()),
-  };
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum X509Subject {
+  Always,
+  Never,
+}
 
-  let inner =
+impl Default for X509Subject {
+  fn default() -> Self {
+    X509Subject::Always
+  }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct X509CheckOptions {
+  subject: X509Subject,
+  wildcards: bool,
+  partial_wildcards: bool,
+  multi_label_wildcards: bool,
+  single_label_subdomains: bool,
+}
+
+impl Default for X509CheckOptions {
+  fn default() -> Self {
+    X509CheckOptions {
+      subject: X509Subject::default(),
+      wildcards: true,
+      partial_wildcards: true,
+      multi_label_wildcards: false,
+      single_label_subdomains: false,
+    }
+  }
+}
+
+#[op2]
+impl Certificate {
+  #[constructor]
+  #[cppgc]
+  fn new(#[anybuffer] buf: &[u8]) -> Result<Certificate, JsX509Error> {
+    let source = match pem::parse_x509_pem(buf) {
+      Ok((_, pem)) => CertificateSources::Pem(pem),
+      Err(_) => CertificateSources::Der(buf.to_vec().into_boxed_slice()),
+    };
+
+    let inner =
     Yoke::<CertificateView<'static>, Box<CertificateSources>>::try_attach_to_cart(
       Box::new(source),
       |source| {
@@ -85,100 +121,219 @@ pub fn op_node_x509_parse(
       },
     )?;
 
-  Ok(Certificate { inner })
-}
-
-#[op2(fast)]
-pub fn op_node_x509_ca(#[cppgc] cert: &Certificate) -> bool {
-  let cert = cert.inner.get().deref();
-  cert.is_ca()
-}
-
-#[op2(fast)]
-pub fn op_node_x509_check_email(
-  #[cppgc] cert: &Certificate,
-  #[string] email: &str,
-) -> bool {
-  let cert = cert.inner.get().deref();
-  let subject = cert.subject();
-  if subject
-    .iter_email()
-    .any(|e| e.as_str().unwrap_or("") == email)
-  {
-    return true;
+    Ok(Certificate { inner })
   }
 
-  let subject_alt = cert
-    .extensions()
-    .iter()
-    .find(|e| e.oid == x509_parser::oid_registry::OID_X509_EXT_SUBJECT_ALT_NAME)
-    .and_then(|e| match e.parsed_extension() {
-      extensions::ParsedExtension::SubjectAlternativeName(s) => Some(s),
-      _ => None,
-    });
+  #[getter]
+  fn ca(&self) -> bool {
+    let cert = self.inner.get().deref();
+    cert.is_ca()
+  }
 
-  if let Some(subject_alt) = subject_alt {
-    for name in &subject_alt.general_names {
-      if let extensions::GeneralName::RFC822Name(n) = name {
-        if *n == email {
-          return true;
+  #[fast]
+  fn check_email(&self, #[string] email: &str) -> bool {
+    let cert = self.inner.get().deref();
+    let subject = cert.subject();
+    if subject
+      .iter_email()
+      .any(|e| e.as_str().unwrap_or("") == email)
+    {
+      return true;
+    }
+
+    let subject_alt = cert
+      .extensions()
+      .iter()
+      .find(|e| {
+        e.oid == x509_parser::oid_registry::OID_X509_EXT_SUBJECT_ALT_NAME
+      })
+      .and_then(|e| match e.parsed_extension() {
+        extensions::ParsedExtension::SubjectAlternativeName(s) => Some(s),
+        _ => None,
+      });
+
+    if let Some(subject_alt) = subject_alt {
+      for name in &subject_alt.general_names {
+        if let extensions::GeneralName::RFC822Name(n) = name {
+          if *n == email {
+            return true;
+          }
         }
       }
     }
+
+    false
   }
 
-  false
-}
+  #[fast]
+  fn check_host(&self, #[string] name: &str) {}
 
-#[op2]
-#[string]
-pub fn op_node_x509_fingerprint(#[cppgc] cert: &Certificate) -> Option<String> {
-  cert.fingerprint::<sha1::Sha1>()
-}
+  #[fast]
+  #[rename("checkIP")]
+  fn check_ip(&self, #[string] name: &str) {}
 
-#[op2]
-#[string]
-pub fn op_node_x509_fingerprint256(
-  #[cppgc] cert: &Certificate,
-) -> Option<String> {
-  cert.fingerprint::<sha2::Sha256>()
-}
+  #[fast]
+  fn check_issued(&self, #[cppgc] issuer: &Certificate) -> bool {
+    let cert = self.inner.get().deref();
+    let issuer = issuer.inner.get().deref();
 
-#[op2]
-#[string]
-pub fn op_node_x509_fingerprint512(
-  #[cppgc] cert: &Certificate,
-) -> Option<String> {
-  cert.fingerprint::<sha2::Sha512>()
-}
+    cert.issuer() == issuer.subject()
+  }
 
-#[op2]
-#[string]
-pub fn op_node_x509_get_issuer(
-  #[cppgc] cert: &Certificate,
-) -> Result<String, JsX509Error> {
-  let cert = cert.inner.get().deref();
-  x509name_to_string(cert.issuer(), oid_registry()).map_err(Into::into)
-}
+  #[fast]
+  fn check_private_key(&self, #[cppgc] key: &KeyObjectHandle) -> bool {
+    false
+  }
 
-#[op2]
-#[string]
-pub fn op_node_x509_get_subject(
-  #[cppgc] cert: &Certificate,
-) -> Result<String, JsX509Error> {
-  let cert = cert.inner.get().deref();
-  x509name_to_string(cert.subject(), oid_registry()).map_err(Into::into)
-}
+  #[getter]
+  #[string]
+  fn fingerprint(&self) -> Option<String> {
+    self.fingerprint_digest::<sha1::Sha1>()
+  }
 
-#[op2]
-#[cppgc]
-pub fn op_node_x509_public_key(
-  #[cppgc] cert: &Certificate,
-) -> Result<KeyObjectHandle, super::keys::X509PublicKeyError> {
-  let cert = cert.inner.get().deref();
-  let public_key = &cert.tbs_certificate.subject_pki;
+  #[getter]
+  #[string]
+  fn fingerprint256(&self) -> Option<String> {
+    self.fingerprint_digest::<sha2::Sha256>()
+  }
 
-  KeyObjectHandle::new_x509_public_key(public_key)
+  #[getter]
+  #[string]
+  fn fingerprint512(&self) -> Option<String> {
+    self.fingerprint_digest::<sha2::Sha512>()
+  }
+
+  #[getter]
+  #[string]
+  fn issuer(&self) -> Result<String, JsX509Error> {
+    let cert = self.inner.get().deref();
+    x509name_to_string(cert.issuer(), oid_registry()).map_err(Into::into)
+  }
+
+  #[getter]
+  #[string]
+  fn info_access(&self) -> Option<String> {
+    let cert = self.inner.get().deref();
+    let info_access = cert
+      .extensions()
+      .iter()
+      .find(|e| {
+        e.oid == x509_parser::oid_registry::OID_PKIX_AUTHORITY_INFO_ACCESS
+      })
+      .and_then(|e| match e.parsed_extension() {
+        extensions::ParsedExtension::AuthorityInfoAccess(a) => Some(a),
+        _ => None,
+      });
+
+    // info_access.map(|a| a.to_string())
+    todo!()
+  }
+
+  #[getter]
+  fn issuer_certificate(&self) {}
+
+  #[getter]
+  #[serde]
+  fn key_usage(&self) -> Option<Vec<&'static str>> {
+    let cert = self.inner.get().deref();
+    let key_usage = cert
+      .extensions()
+      .iter()
+      .find(|e| e.oid == x509_parser::oid_registry::OID_X509_EXT_KEY_USAGE)
+      .and_then(|e| match e.parsed_extension() {
+        extensions::ParsedExtension::KeyUsage(k) => Some(k),
+        _ => None,
+      });
+
+    let flags = key_usage.map(|k| k.flags).unwrap_or(0);
+
+    if flags == 0x0 {
+      return None;
+    }
+
+    let mut res = Vec::new();
+    if flags & 0x01 != 0 {
+      res.push("Digital Signature");
+    } else if flags & 0x02 != 0 {
+      res.push("NonRepudiation");
+    } else if flags & 0x04 != 0 {
+      res.push("KeyEncipherment");
+    } else if flags & 0x08 != 0 {
+      res.push("DataEncipherment");
+    } else if flags & 0x10 != 0 {
+      res.push("KeyAgreement");
+    } else if flags & 0x20 != 0 {
+      res.push("KeyCert Sign");
+    } else if flags & 0x40 != 0 {
+      res.push("CRLSign");
+    } else if flags & 0x80 != 0 {
+      res.push("EncipherOnly");
+    } else if flags & 0x100 != 0 {
+      res.push("DecipherOnly");
+    }
+
+    Some(res)
+  }
+
+  #[getter]
+  #[cppgc]
+  fn public_key(
+    &self,
+  ) -> Result<KeyObjectHandle, super::keys::X509PublicKeyError> {
+    let cert = self.inner.get().deref();
+    let public_key = &cert.tbs_certificate.subject_pki;
+
+    KeyObjectHandle::new_x509_public_key(public_key)
+  }
+
+  #[getter]
+  #[string]
+  fn serial_number(&self) -> String {
+    let cert = self.inner.get().deref();
+    let mut s = cert.serial.to_str_radix(16);
+    s.make_ascii_uppercase();
+    s
+  }
+
+  #[getter]
+  fn subject_alt_name(&self) {}
+
+  #[getter]
+  #[string]
+  fn subject(&self) -> Result<String, JsX509Error> {
+    let cert = self.inner.get().deref();
+    x509name_to_string(cert.subject(), oid_registry()).map_err(Into::into)
+  }
+
+  #[getter]
+  #[string]
+  fn valid_from(&self) -> String {
+    let cert = self.inner.get().deref();
+    cert.validity().not_before.to_string()
+  }
+
+  #[getter]
+  #[string]
+  fn valid_to(&self) -> String {
+    let cert = self.inner.get().deref();
+    cert.validity().not_after.to_string()
+  }
+
+  #[string]
+  fn to_string(&self) -> String {
+    todo!()
+  }
+
+  #[rename("toJSON")]
+  #[string]
+  fn to_json(&self) -> String {
+    todo!()
+  }
+
+  #[fast]
+  fn verify(&self) -> bool {
+    todo!()
+  }
 }
 
 // Attempt to convert attribute to string. If type is not a string, return value is the hex
@@ -239,42 +394,4 @@ fn x509name_to_string(
         _ => acc + "\n" + v.as_str(),
       })
   })
-}
-
-#[op2]
-#[string]
-pub fn op_node_x509_get_valid_from(#[cppgc] cert: &Certificate) -> String {
-  let cert = cert.inner.get().deref();
-  cert.validity().not_before.to_string()
-}
-
-#[op2]
-#[string]
-pub fn op_node_x509_get_valid_to(#[cppgc] cert: &Certificate) -> String {
-  let cert = cert.inner.get().deref();
-  cert.validity().not_after.to_string()
-}
-
-#[op2]
-#[string]
-pub fn op_node_x509_get_serial_number(#[cppgc] cert: &Certificate) -> String {
-  let cert = cert.inner.get().deref();
-  let mut s = cert.serial.to_str_radix(16);
-  s.make_ascii_uppercase();
-  s
-}
-
-#[op2(fast)]
-pub fn op_node_x509_key_usage(#[cppgc] cert: &Certificate) -> u16 {
-  let cert = cert.inner.get().deref();
-  let key_usage = cert
-    .extensions()
-    .iter()
-    .find(|e| e.oid == x509_parser::oid_registry::OID_X509_EXT_KEY_USAGE)
-    .and_then(|e| match e.parsed_extension() {
-      extensions::ParsedExtension::KeyUsage(k) => Some(k),
-      _ => None,
-    });
-
-  key_usage.map(|k| k.flags).unwrap_or(0)
 }
