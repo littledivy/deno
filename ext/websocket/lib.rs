@@ -39,6 +39,7 @@ use fastwebsockets::Frame;
 use fastwebsockets::OpCode;
 use fastwebsockets::Role;
 use fastwebsockets::WebSocket;
+use fastwebsockets::WebSocketRead;
 use fastwebsockets::WebSocketWrite;
 use http::header::CONNECTION;
 use http::header::UPGRADE;
@@ -53,6 +54,7 @@ use rustls_tokio_stream::rustls::pki_types::ServerName;
 use rustls_tokio_stream::rustls::RootCertStore;
 use rustls_tokio_stream::TlsStream;
 use serde::Serialize;
+use stream::WebSocketStreamWrite;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::io::ReadHalf;
@@ -550,13 +552,13 @@ pub struct ServerWebSocket {
   closed: Cell<bool>,
   buffer: Cell<Option<Vec<u8>>>,
   string: Cell<Option<String>>,
-  ws_read: AsyncRefCell<FragmentCollectorRead<ReadHalf<WebSocketStream>>>,
-  ws_write: AsyncRefCell<WebSocketWrite<WriteHalf<WebSocketStream>>>,
+  ws_read: AsyncRefCell<FragmentCollectorRead<WebSocketStream>>,
+  ws_write: AsyncRefCell<WebSocketWrite<WebSocketStreamWrite>>,
 }
 
 impl ServerWebSocket {
   fn new(ws: WebSocket<WebSocketStream>) -> Self {
-    let (ws_read, ws_write) = ws.split(tokio::io::split);
+    let (ws_read, ws_write) = ws.split(crate::stream::split);
     Self {
       buffered: Cell::new(0),
       error: Cell::new(None),
@@ -582,14 +584,14 @@ impl ServerWebSocket {
   /// Reserve a lock, but don't wait on it. This gets us our place in line.
   fn reserve_lock(
     self: &Rc<Self>,
-  ) -> AsyncMutFuture<WebSocketWrite<WriteHalf<WebSocketStream>>> {
+  ) -> AsyncMutFuture<WebSocketWrite<WebSocketStreamWrite>> {
     RcRef::map(self, |r| &r.ws_write).borrow_mut()
   }
 
   #[inline]
   async fn write_frame(
     self: &Rc<Self>,
-    lock: AsyncMutFuture<WebSocketWrite<WriteHalf<WebSocketStream>>>,
+    lock: AsyncMutFuture<WebSocketWrite<WebSocketStreamWrite>>,
     frame: Frame<'_>,
   ) -> Result<(), WebsocketError> {
     let mut ws = lock.await;

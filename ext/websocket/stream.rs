@@ -1,6 +1,10 @@
 // Copyright 2018-2025 the Deno authors. MIT license.
 use std::io::ErrorKind;
+use std::ops::Deref;
+use std::ops::DerefMut;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::task::ready;
 use std::task::Poll;
 
@@ -22,17 +26,57 @@ pub(crate) enum WsStreamKind {
   H2(SendStream<Bytes>, RecvStream),
 }
 
+pub(crate) struct WebSocketStreamWrite {
+  write_half: Arc<Mutex<WsStreamKind>>,
+}
+
+impl WebSocketStreamWrite {
+  fn with_write_lock<R>(&self, f: impl FnOnce(&mut WsStreamKind) -> R) -> R {
+    let mut write_half = self.write_half.lock().unwrap();
+    f(&mut write_half)
+  }
+}
+
 pub(crate) struct WebSocketStream {
-  stream: WsStreamKind,
+  read_half: Arc<Mutex<WsStreamKind>>,
+  write_half: Option<WebSocketStreamWrite>,
   pre: Option<Bytes>,
 }
 
 impl WebSocketStream {
   pub fn new(stream: WsStreamKind, buffer: Option<Bytes>) -> Self {
+    let inner = Arc::new(Mutex::new(stream));
     Self {
-      stream,
+      read_half: inner.clone(),
+      write_half: Some(WebSocketStreamWrite { write_half: inner }),
       pre: buffer,
     }
+  }
+
+  fn with_read_lock<R>(&self, f: impl FnOnce(&mut WsStreamKind) -> R) -> R {
+    let mut read_half = self.read_half.lock().unwrap();
+    f(&mut read_half)
+  }
+}
+
+pub(crate) fn split(
+  mut ws: WebSocketStream,
+) -> (WebSocketStream, WebSocketStreamWrite) {
+  let wr = ws.write_half.take().expect("already split");
+  (ws, wr)
+}
+
+impl Deref for WebSocketStream {
+  type Target = WebSocketStreamWrite;
+
+  fn deref(&self) -> &Self::Target {
+    self.write_half.as_ref().unwrap()
+  }
+}
+
+impl DerefMut for WebSocketStream {
+  fn deref_mut(&mut self) -> &mut Self::Target {
+    self.write_half.as_mut().unwrap()
   }
 }
 
@@ -58,7 +102,7 @@ impl AsyncRead for WebSocketStream {
         return Poll::Ready(Ok(()));
       }
     }
-    match &mut self.stream {
+    self.with_read_lock(|stream| match stream {
       WsStreamKind::Network(stream) => Pin::new(stream).poll_read(cx, buf),
       WsStreamKind::Upgraded(stream) => Pin::new(stream).poll_read(cx, buf),
       WsStreamKind::H2(_, recv) => {
@@ -78,21 +122,61 @@ impl AsyncRead for WebSocketStream {
         data.advance(copy_len);
         // Put back what's left
         if !data.is_empty() {
-          self.pre = Some(data);
+          //self.pre = Some(data);
         }
         Poll::Ready(Ok(()))
       }
-    }
+    })
   }
 }
 
 impl AsyncWrite for WebSocketStream {
   fn poll_write(
-    mut self: Pin<&mut Self>,
+    self: Pin<&mut Self>,
     cx: &mut std::task::Context<'_>,
     buf: &[u8],
   ) -> std::task::Poll<Result<usize, std::io::Error>> {
-    match &mut self.stream {
+    let stream = Pin::new(&mut *self.get_mut().write_half.as_mut().unwrap());
+    stream.poll_write(cx, buf)
+  }
+
+  fn poll_flush(
+    self: Pin<&mut Self>,
+    cx: &mut std::task::Context<'_>,
+  ) -> std::task::Poll<Result<(), std::io::Error>> {
+    let stream = Pin::new(&mut *self.get_mut().write_half.as_mut().unwrap());
+    stream.poll_flush(cx)
+  }
+
+  fn poll_shutdown(
+    self: Pin<&mut Self>,
+    cx: &mut std::task::Context<'_>,
+  ) -> std::task::Poll<Result<(), std::io::Error>> {
+    let stream = Pin::new(&mut *self.get_mut().write_half.as_mut().unwrap());
+    stream.poll_shutdown(cx)
+  }
+
+  fn is_write_vectored(&self) -> bool {
+    self.write_half.as_ref().unwrap().is_write_vectored()
+  }
+
+  fn poll_write_vectored(
+    self: Pin<&mut Self>,
+    cx: &mut std::task::Context<'_>,
+    bufs: &[std::io::IoSlice<'_>],
+  ) -> std::task::Poll<Result<usize, std::io::Error>> {
+    let stream = Pin::new(&mut *self.get_mut().write_half.as_mut().unwrap());
+    stream.poll_write_vectored(cx, bufs)
+  }
+}
+
+impl AsyncWrite for WebSocketStreamWrite {
+  fn poll_write(
+    self: Pin<&mut Self>,
+    cx: &mut std::task::Context<'_>,
+    buf: &[u8],
+  ) -> std::task::Poll<Result<usize, std::io::Error>> {
+    self.with_write_lock(|stream| match stream {
       WsStreamKind::Network(stream) => Pin::new(stream).poll_write(cx, buf),
       WsStreamKind::Upgraded(stream) => Pin::new(stream).poll_write(cx, buf),
       WsStreamKind::H2(send, _) => {
@@ -119,25 +203,25 @@ impl AsyncWrite for WebSocketStream {
           .map_err(|_| std::io::Error::from(ErrorKind::Other));
         Poll::Ready(res.map(|_| len))
       }
-    }
+    })
   }
 
   fn poll_flush(
-    mut self: Pin<&mut Self>,
+    self: Pin<&mut Self>,
     cx: &mut std::task::Context<'_>,
   ) -> std::task::Poll<Result<(), std::io::Error>> {
-    match &mut self.stream {
+    self.with_write_lock(|stream| match stream {
       WsStreamKind::Network(stream) => Pin::new(stream).poll_flush(cx),
       WsStreamKind::Upgraded(stream) => Pin::new(stream).poll_flush(cx),
       WsStreamKind::H2(..) => Poll::Ready(Ok(())),
-    }
+    })
   }
 
   fn poll_shutdown(
-    mut self: Pin<&mut Self>,
+    self: Pin<&mut Self>,
     cx: &mut std::task::Context<'_>,
   ) -> std::task::Poll<Result<(), std::io::Error>> {
-    match &mut self.stream {
+    self.with_write_lock(|stream| match stream {
       WsStreamKind::Network(stream) => Pin::new(stream).poll_shutdown(cx),
       WsStreamKind::Upgraded(stream) => Pin::new(stream).poll_shutdown(cx),
       WsStreamKind::H2(send, _) => {
@@ -147,23 +231,23 @@ impl AsyncWrite for WebSocketStream {
           .map_err(|_| std::io::Error::from(ErrorKind::Other));
         Poll::Ready(res)
       }
-    }
+    })
   }
 
   fn is_write_vectored(&self) -> bool {
-    match &self.stream {
+    self.with_write_lock(|stream| match stream {
       WsStreamKind::Network(stream) => stream.is_write_vectored(),
       WsStreamKind::Upgraded(stream) => stream.is_write_vectored(),
       WsStreamKind::H2(..) => false,
-    }
+    })
   }
 
   fn poll_write_vectored(
-    mut self: Pin<&mut Self>,
+    self: Pin<&mut Self>,
     cx: &mut std::task::Context<'_>,
     bufs: &[std::io::IoSlice<'_>],
   ) -> std::task::Poll<Result<usize, std::io::Error>> {
-    match &mut self.stream {
+    self.with_write_lock(|stream| match stream {
       WsStreamKind::Network(stream) => {
         Pin::new(stream).poll_write_vectored(cx, bufs)
       }
@@ -174,6 +258,6 @@ impl AsyncWrite for WebSocketStream {
         // TODO(mmastrac): this is possibly just too difficult, but we'll never call it
         unimplemented!()
       }
-    }
+    })
   }
 }
