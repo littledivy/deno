@@ -359,6 +359,13 @@ fn setup_panic_hook() {
     eprintln!("Version: {}", deno_lib::version::DENO_VERSION_INFO.deno);
     eprintln!("Args: {:?}", env::args().collect::<Vec<_>>());
     eprintln!();
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    {
+      static TRACE_BASE_URL: &str = "https://deno.report/";
+
+      let trace_str = resym::win64::trace();
+      eprintln!("{}{}", TRACE_BASE_URL, trace_str);
+    }
     orig_hook(panic_info);
     deno_runtime::exit(1);
   }));

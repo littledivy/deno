@@ -1036,6 +1036,7 @@ const ci = {
           run: [
             'gsutil -h "Cache-Control: public, max-age=3600" cp ./target/release/*.zip gs://dl.deno.land/release/${GITHUB_REF#refs/*/}/',
             'gsutil -h "Cache-Control: public, max-age=3600" cp ./target/release/*.sha256sum gs://dl.deno.land/release/${GITHUB_REF#refs/*/}/',
+            'gsutil -h "Cache-Control: public, max-age=3600" cp ./target/release/deno.pdb gs://dl.deno.land/release/${GITHUB_REF#refs/*/}/',
           ].join("\n"),
         },
         {
