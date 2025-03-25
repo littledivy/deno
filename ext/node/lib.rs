@@ -444,7 +444,8 @@ deno_core::extension!(deno_node,
     ops::perf_hooks::EldHistogram,
     ops::sqlite::DatabaseSync,
     ops::sqlite::Session,
-    ops::sqlite::StatementSync
+    ops::sqlite::StatementSync,
+    ops::handle_wrap::HandleWrap
   ],
   esm_entry_point = "ext:deno_node/02_init.js",
   esm = [

@@ -18,6 +18,7 @@ import { providerType } from "ext:deno_node/internal_binding/async_wrap.ts";
 import { Socket } from "node:net";
 import { setReadStream } from "ext:deno_node/_process/streams.mjs";
 import * as io from "ext:deno_io/12_io.js";
+import { TTY } from "ext:core/ops";
 
 // Returns true when the given numeric fd is associated with a TTY and false otherwise.
 function isatty(fd) {

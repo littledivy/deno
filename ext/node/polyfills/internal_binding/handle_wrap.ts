@@ -26,10 +26,7 @@
 
 // TODO(petamoriken): enable prefer-primordials for node polyfills
 import { unreachable } from "ext:deno_node/_util/asserts.ts";
-import {
-  AsyncWrap,
-  providerType,
-} from "ext:deno_node/internal_binding/async_wrap.ts";
+import { AsyncWrap, providerType } from "ext:deno_node/internal_binding/async_wrap.ts";
 import { nextTick } from "ext:deno_node/_process/process.ts";
 
 export class HandleWrap extends AsyncWrap {
