@@ -126,7 +126,7 @@ export class TLSSocket extends net.Socket {
     this._controlReleased = false;
     this.secureConnecting = true;
     this._SNICallback = null;
-    this.servername = null;
+    this.servername = tlsOptions.servername || null;
     this.alpnProtocol = null;
     this.alpnProtocols = tlsOptions.ALPNProtocols;
     this.authorized = false;

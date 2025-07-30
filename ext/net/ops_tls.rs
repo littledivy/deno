@@ -242,6 +242,7 @@ pub struct StartTlsArgs {
   hostname: String,
   alpn_protocols: Option<Vec<String>>,
   reject_unauthorized: Option<bool>,
+  server_name: Option<String>,
 }
 
 #[op2]
@@ -330,8 +331,12 @@ where
     .map(|s| s.into_bytes())
     .collect::<Vec<_>>();
 
-  let hostname_dns = ServerName::try_from(hostname.to_string())
-    .map_err(|_| NetError::InvalidHostname(hostname))?;
+  let hostname_dns = if let Some(server_name) = args.server_name {
+    ServerName::try_from(server_name)
+  } else {
+    ServerName::try_from(hostname.clone())
+  }
+  .map_err(|_| NetError::InvalidHostname(hostname))?;
 
   // --unsafely-ignore-certificate-errors overrides the `rejectUnauthorized` option.
   let unsafely_ignore_certificate_errors = if reject_unauthorized {
@@ -354,6 +359,7 @@ where
     .resource_table
     .take::<TcpStreamResource>(rid)
     .map_err(NetError::Resource)?;
+
   // This TCP connection might be used somewhere else. If it's the case, we cannot proceed with the
   // process of starting a TLS connection on top of this TCP connection, so we just return a Busy error.
   // See also: https://github.com/denoland/deno/pull/16242

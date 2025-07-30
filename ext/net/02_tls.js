@@ -204,6 +204,7 @@ function startTlsInternal(
     caCerts = [],
     alpnProtocols = undefined,
     rejectUnauthorized,
+    servername,
   },
 ) {
   const { 0: rid, 1: localAddr, 2: remoteAddr } = op_tls_start({
@@ -212,6 +213,7 @@ function startTlsInternal(
     caCerts,
     alpnProtocols,
     rejectUnauthorized,
+    serverName: servername,
   }, null);
   return new TlsConn(rid, remoteAddr, localAddr);
 }

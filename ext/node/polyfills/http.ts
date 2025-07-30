@@ -1032,6 +1032,10 @@ export class IncomingMessageForClient extends NodeReadable {
     // read by the user, so there's no point continuing to handle it.
     this._dumped = false;
 
+    this.on("end", () => {
+       this.socket.emit("free");
+    });
+
     this.on("close", () => {
       this.socket.emit("close");
     });
