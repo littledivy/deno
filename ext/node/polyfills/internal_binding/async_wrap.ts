@@ -125,6 +125,7 @@ export enum providerType {
   WORKERHEAPSNAPSHOT,
   WRITEWRAP,
   ZLIB,
+  TLSWRAP,
 }
 
 export { AsyncWrap };

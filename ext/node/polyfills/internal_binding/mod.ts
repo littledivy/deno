@@ -18,6 +18,7 @@ import * as types from "ext:deno_node/internal_binding/types.ts";
 import * as udpWrap from "ext:deno_node/internal_binding/udp_wrap.ts";
 import * as util from "ext:deno_node/internal_binding/util.ts";
 import * as uv from "ext:deno_node/internal_binding/uv.ts";
+import * as tlsWrap from "ext:deno_node/internal_binding/tls_wrap.js";
 import * as httpParser from "ext:deno_node/internal_binding/http_parser.ts";
 
 const modules = {
@@ -57,7 +58,7 @@ const modules = {
   "task_queue": {},
   "tcp_wrap": tcpWrap,
   timers: {},
-  "tls_wrap": {},
+  "tls_wrap": tlsWrap,
   "trace_events": {},
   "tty_wrap": ttyWrap,
   types,

@@ -9,7 +9,21 @@ const socket = tls.connect(443, "google.com", {
 // handle the connection
 socket.on("connect", () => {
   console.log("Connected to google.com");
-  socket.write(
-    "GET / HTTP/1.1\r\nHost: google.com\r\nConnection: close\r\n\r\n",
-  );
+  try {
+    socket.write(
+      Buffer.from(
+        "GET / HTTP/1.1\r\nHost: google.com\r\nConnection: close\r\n\r\n",
+      ),
+    );
+  } catch (error) {
+    console.error("Error writing to socket:", error);
+  }
+
+  console.log("Sent HTTP request to google.com");
+});
+
+socket.on("data", (data) => {
+  console.log("Received data:");
+  console.log(data.toString());
+  socket.end();
 });

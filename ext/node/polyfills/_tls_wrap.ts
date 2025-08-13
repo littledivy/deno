@@ -41,6 +41,7 @@ import {
   kStreamBaseField,
 } from "ext:deno_node/internal_binding/stream_wrap.ts";
 import { kEmptyObject } from "ext:deno_node/internal/util.mjs";
+import tlsWrap from "ext:deno_node/internal_binding/tls_wrap.js";
 import { setImmediate } from "node:timers";
 import assert from "ext:deno_node/internal/assert.mjs";
 import crypto from "node:crypto";
@@ -69,7 +70,6 @@ import {
   constants as PipeConstants,
   Pipe,
 } from "ext:deno_node/internal_binding/pipe_wrap.ts";
-import { op_tls_wrap, TLSWrap } from "ext:core/ops";
 // const { SecureContext: NativeSecureContext } = internalBinding('crypto');
 
 import { codes, ConnResetException } from "ext:deno_node/internal/errors.ts";
@@ -669,9 +669,9 @@ class TLSSocket extends net.Socket {
       //  throw new ERR_TLS_INVALID_CONTEXT("context");
       // }
 
-      const res = op_tls_wrap(
+      const res = tlsWrap.wrap(
         handle,
-        context.context ?? {},
+        context.context,
         !!options.isServer,
         wrapHasActiveWriteFromPrevOwner,
       );
@@ -1253,10 +1253,10 @@ function makeMethodProxy(name) {
   };
 }
 for (const proxiedMethod of proxiedMethods) {
-  TLSWrap.prototype[proxiedMethod] = makeMethodProxy(proxiedMethod);
+  tlsWrap.TLSWrap.prototype[proxiedMethod] = makeMethodProxy(proxiedMethod);
 }
 
-TLSWrap.prototype.close = function close(cb) {
+tlsWrap.TLSWrap.prototype.close = function close(cb) {
   let ssl;
   if (this[owner_symbol]) {
     ssl = this[owner_symbol].ssl;
