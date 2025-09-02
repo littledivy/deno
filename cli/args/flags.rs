@@ -102,6 +102,11 @@ pub struct AddFlags {
   pub default_registry: Option<DefaultRegistry>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AiFlags {
+  pub config: Option<String>,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RemoveFlags {
   pub packages: Vec<String>,
@@ -546,7 +551,7 @@ impl std::fmt::Display for PackageHandling {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DenoSubcommand {
   Add(AddFlags),
-  Ai,
+  Ai(AiFlags),
   Remove(RemoveFlags),
   Bench(BenchFlags),
   Bundle(BundleFlags),
@@ -1903,6 +1908,14 @@ fn ai_subcommand() -> Command {
 This is an experimental AI subcommand for Deno."
     ),
     UnstableArgsConfig::None,
+  )
+  .arg(
+    Arg::new("config")
+      .long("config")
+      .short('c')
+      .value_name("FILE")
+      .help("Path to custom tools configuration file")
+      .value_hint(ValueHint::FilePath),
   )
 }
 
@@ -4953,8 +4966,10 @@ fn add_parse(
   Ok(())
 }
 
-fn ai_parse(flags: &mut Flags, _matches: &mut ArgMatches) {
-  flags.subcommand = DenoSubcommand::Ai;
+fn ai_parse(flags: &mut Flags, matches: &mut ArgMatches) {
+  flags.subcommand = DenoSubcommand::Ai(AiFlags {
+    config: matches.remove_one::<String>("config"),
+  });
 }
 
 fn add_parse_inner(

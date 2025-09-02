@@ -5,10 +5,24 @@ use std::fs;
 use std::io::Write;
 use std::io::{self};
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+use std::thread;
+use std::time::Duration;
 
+use deno_ast::ModuleSpecifier;
 use deno_core::error::AnyError;
 use deno_core::serde_json;
+use deno_runtime::WorkerExecutionMode;
+use deno_runtime::deno_io::Stdio;
+use deno_runtime::deno_permissions::PermissionsContainer;
+use dissimilar::Chunk;
+use dissimilar::diff;
+use percent_encoding::NON_ALPHANUMERIC;
+use percent_encoding::utf8_percent_encode;
 use reqwest::Client;
 use rustyline::Editor;
 use rustyline::error::ReadlineError;
@@ -16,7 +30,10 @@ use rustyline::history::DefaultHistory;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::args::AiFlags;
 use crate::args::Flags;
+use crate::factory::CliFactory;
+use crate::worker::CliMainWorkerFactory;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct AnthropicRequest {
@@ -55,6 +72,14 @@ struct Tool {
   name: String,
   description: String,
   input_schema: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct CustomTool {
+  name: String,
+  desc: String,
+  input_schema: Option<serde_json::Value>,
+  // We don't need to deserialize the fn, we'll call it via deno runtime
 }
 
 #[derive(Debug, Deserialize)]
@@ -124,12 +149,18 @@ struct AiSession {
   api_key: String,
   conversation: Vec<AnthropicMessage>,
   cwd: String,
+  custom_tools_config: Option<PathBuf>,
+  custom_tools: Vec<CustomTool>,
+  worker_factory: Arc<CliMainWorkerFactory>,
+  cli_factory: Arc<CliFactory>,
 }
 
 struct LoadingIndicator {
   message: String,
   frames: Vec<&'static str>,
-  current_frame: usize,
+  frame_index: Arc<AtomicUsize>,
+  is_running: Arc<AtomicBool>,
+  handle: Option<thread::JoinHandle<()>>,
 }
 
 impl LoadingIndicator {
@@ -137,33 +168,70 @@ impl LoadingIndicator {
     Self {
       message,
       frames: vec!["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
-      current_frame: 0,
+      frame_index: Arc::new(AtomicUsize::new(0)),
+      is_running: Arc::new(AtomicBool::new(false)),
+      handle: None,
     }
   }
 
   fn start(&mut self) {
-    print!("\r{} {}... ", self.frames[self.current_frame], self.message);
-    io::stdout().flush().ok();
-    self.current_frame = (self.current_frame + 1) % self.frames.len();
+    self.is_running.store(true, Ordering::SeqCst);
+    let is_running = Arc::clone(&self.is_running);
+    let frame_index = Arc::clone(&self.frame_index);
+    let message = self.message.clone();
+    let frames = self.frames.clone();
+
+    let handle = thread::spawn(move || {
+      while is_running.load(Ordering::SeqCst) {
+        let current_frame = frame_index.load(Ordering::SeqCst);
+        print!("\r{} {}... ", frames[current_frame], message);
+        io::stdout().flush().ok();
+        frame_index.store((current_frame + 1) % frames.len(), Ordering::SeqCst);
+        thread::sleep(Duration::from_millis(120));
+      }
+    });
+
+    self.handle = Some(handle);
   }
 
-  fn stop(&self, result_message: Option<&str>) {
+  fn stop(&mut self, result_message: Option<&str>) {
+    self.is_running.store(false, Ordering::SeqCst);
+    if let Some(handle) = self.handle.take() {
+      handle.join().ok();
+    }
+
+    print!("\r\x1b[K"); // Clear the line
     if let Some(msg) = result_message {
-      print!("\r✓ {} - {}\n", self.message, msg);
+      print!("✓ {} - {}\n", self.message, msg);
     } else {
-      print!("\r✓ {}\n", self.message);
+      print!("✓ {}\n", self.message);
     }
     io::stdout().flush().ok();
   }
 
-  fn error(&self, error_message: &str) {
-    print!("\r✗ {} - Error: {}\n", self.message, error_message);
+  fn error(&mut self, error_message: &str) {
+    self.is_running.store(false, Ordering::SeqCst);
+    if let Some(handle) = self.handle.take() {
+      handle.join().ok();
+    }
+
+    print!("\r\x1b[K"); // Clear the line
+    print!("✗ {} - Error: {}\n", self.message, error_message);
     io::stdout().flush().ok();
   }
 }
 
+// We'll implement this differently to avoid accessing private fields
+
 impl AiSession {
-  fn new(model_provider: String, model_name: String, api_key: String) -> Self {
+  fn new(
+    model_provider: String,
+    model_name: String,
+    api_key: String,
+    custom_tools_config: Option<PathBuf>,
+    worker_factory: Arc<CliMainWorkerFactory>,
+    cli_factory: Arc<CliFactory>,
+  ) -> Self {
     let cwd = env::current_dir()
       .unwrap_or_default()
       .to_string_lossy()
@@ -176,11 +244,97 @@ impl AiSession {
       api_key,
       conversation: Vec::new(),
       cwd,
+      custom_tools_config,
+      custom_tools: Vec::new(),
+      worker_factory,
+      cli_factory,
     }
   }
 
-  fn get_mcp_tools() -> Vec<Tool> {
-    vec![
+  async fn load_custom_tools(&mut self) -> Result<(), AnyError> {
+    if let Some(config_path) = &self.custom_tools_config {
+      let mut loader = LoadingIndicator::new("Loading tools".to_string());
+      loader.start();
+
+      match self.load_tools_directly(config_path).await {
+        Ok(tools_data) => {
+          self.custom_tools = tools_data;
+          loader
+            .stop(Some(&format!("Loaded {} tools", self.custom_tools.len())));
+        }
+        Err(e) => {
+          loader.error(&format!("Failed to load tools: {}", e));
+          return Err(e);
+        }
+      }
+    }
+    Ok(())
+  }
+
+  // Load tools using the Deno runtime
+  async fn load_tools_directly(
+    &self,
+    config_path: &PathBuf,
+  ) -> Result<Vec<CustomTool>, AnyError> {
+    let config_specifier = ModuleSpecifier::from_file_path(config_path)
+      .map_err(|_| {
+        AnyError::msg("Failed to convert config path to module specifier")
+      })?;
+
+    let permissions = PermissionsContainer::allow_all(
+      self.cli_factory.permission_desc_parser()?.clone(),
+    );
+
+    let mut worker = self
+      .worker_factory
+      .create_custom_worker(
+        WorkerExecutionMode::Run,
+        config_specifier,
+        vec![],
+        permissions,
+        vec![],
+        Stdio::default(),
+        None,
+      )
+      .await
+      .map_err(|e| AnyError::msg(format!("Failed to create worker: {}", e)))?;
+
+    worker.execute_main_module().await.map_err(|e| {
+      AnyError::msg(format!("Failed to execute tools config: {}", e))
+    })?;
+
+    // Get the tools from globalThis.tools using execute_script_static
+    let tools_script = r#"
+      if (!globalThis.tools) {
+        throw new Error("No globalThis.tools found. Please set globalThis.tools in your config file.");
+      }
+      globalThis.tools.map(tool => ({
+        name: tool.name,
+        desc: tool.desc,
+        input_schema: tool.input_schema || null
+      }))
+    "#;
+
+    let tools_value =
+      worker
+        .execute_script_static("get_tools", tools_script)
+        .map_err(|e| AnyError::msg(format!("Failed to get tools: {}", e)))?;
+
+    // Convert the worker to MainWorker to access js_runtime
+    let mut main_worker = worker.into_main_worker();
+    let runtime = &mut main_worker.js_runtime;
+    let scope = &mut runtime.handle_scope();
+    let tools_local = deno_core::v8::Local::new(scope, tools_value);
+    let tools: Vec<CustomTool> =
+      deno_core::serde_v8::from_v8(scope, tools_local).map_err(|e| {
+        AnyError::msg(format!("Failed to deserialize tools: {}", e))
+      })?;
+
+    Ok(tools)
+  }
+
+  fn get_all_tools(&self) -> Vec<Tool> {
+    let mut tools = vec![
       Tool {
         name: "read_file".to_string(),
         description: "Read the contents of a file".to_string(),
@@ -242,14 +396,112 @@ impl AiSession {
         }),
       },
       Tool {
-        name: "get_jsr_docs".to_string(),
-        description: "Get comprehensive documentation for a JSR module including API reference from TOC".to_string(),
+        name: "get_docs".to_string(),
+        description: "Get documentation for any TypeScript/JavaScript module using deno_doc".to_string(),
+        input_schema: serde_json::json!({
+          "type": "object",
+          "properties": {
+            "module_path": {
+              "type": "string",
+              "description": "The path to the module file or URL (e.g., './mod.ts', 'https://deno.land/std/fs/mod.ts')"
+            },
+            "filter": {
+              "type": "string",
+              "description": "Optional filter to show only specific symbols (e.g., 'readFile', 'MyClass')"
+            }
+          },
+          "required": ["module_path"]
+        }),
+      },
+      Tool {
+        name: "edit_file".to_string(),
+        description: "Edit a file by replacing specific content with new content, showing a diff".to_string(),
+        input_schema: serde_json::json!({
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "The file path to edit"
+            },
+            "old_content": {
+              "type": "string",
+              "description": "The content to replace (must be exact match)"
+            },
+            "new_content": {
+              "type": "string",
+              "description": "The new content to replace with"
+            }
+          },
+          "required": ["path", "old_content", "new_content"]
+        }),
+      },
+      Tool {
+        name: "jsr_search_packages".to_string(),
+        description: "Search for packages on JSR registry".to_string(),
+        input_schema: serde_json::json!({
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search query for packages"
+            },
+            "limit": {
+              "type": "number",
+              "description": "Maximum number of packages to return (1-100, default 20)"
+            },
+            "page": {
+              "type": "number", 
+              "description": "Page number for pagination (default 1)"
+            }
+          },
+          "required": ["query"]
+        }),
+      },
+      Tool {
+        name: "jsr_get_package".to_string(),
+        description: "Get detailed information about a specific JSR package".to_string(),
         input_schema: serde_json::json!({
           "type": "object",
           "properties": {
             "scope": {
               "type": "string",
-              "description": "The JSR scope (e.g., 'std' for @std packages)"
+              "description": "The package scope (e.g., 'std')"
+            },
+            "package": {
+              "type": "string", 
+              "description": "The package name (e.g., 'fs')"
+            }
+          },
+          "required": ["scope", "package"]
+        }),
+      },
+      Tool {
+        name: "jsr_get_package_versions".to_string(),
+        description: "Get all versions of a JSR package".to_string(),
+        input_schema: serde_json::json!({
+          "type": "object",
+          "properties": {
+            "scope": {
+              "type": "string",
+              "description": "The package scope (e.g., 'std')"
+            },
+            "package": {
+              "type": "string",
+              "description": "The package name (e.g., 'fs')"
+            }
+          },
+          "required": ["scope", "package"]
+        }),
+      },
+      Tool {
+        name: "jsr_get_package_version".to_string(),
+        description: "Get detailed information about a specific version of a JSR package".to_string(),
+        input_schema: serde_json::json!({
+          "type": "object",
+          "properties": {
+            "scope": {
+              "type": "string",
+              "description": "The package scope (e.g., 'std')"
             },
             "package": {
               "type": "string",
@@ -257,13 +509,55 @@ impl AiSession {
             },
             "version": {
               "type": "string",
-              "description": "The version (optional, defaults to latest)"
+              "description": "The version (e.g., '1.2.3')"
             }
           },
-          "required": ["scope", "package"]
+          "required": ["scope", "package", "version"]
         }),
       },
-    ]
+      Tool {
+        name: "jsr_get_package_dependencies".to_string(),
+        description: "Get dependencies of a specific JSR package version".to_string(),
+        input_schema: serde_json::json!({
+          "type": "object",
+          "properties": {
+            "scope": {
+              "type": "string",
+              "description": "The package scope (e.g., 'std')"
+            },
+            "package": {
+              "type": "string",
+              "description": "The package name (e.g., 'fs')"
+            },
+            "version": {
+              "type": "string",
+              "description": "The version (e.g., '1.2.3')"
+            }
+          },
+          "required": ["scope", "package", "version"]
+        }),
+      },
+    ];
+
+    // Add custom tools
+    for custom_tool in &self.custom_tools {
+      let input_schema =
+        custom_tool.input_schema.clone().unwrap_or_else(|| {
+          serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "required": []
+          })
+        });
+
+      tools.push(Tool {
+        name: custom_tool.name.clone(),
+        description: custom_tool.desc.clone(),
+        input_schema,
+      });
+    }
+
+    tools
   }
 
   async fn execute_tool(
@@ -271,7 +565,7 @@ impl AiSession {
     name: &str,
     input: &serde_json::Value,
   ) -> Result<String, AnyError> {
-    let mut loader = LoadingIndicator::new(format!("Executing tool: {}", name));
+    let mut loader = LoadingIndicator::new(format!("+ {}({})", name, input));
     loader.start();
 
     let result = match name {
@@ -297,9 +591,68 @@ impl AiSession {
           })?;
         }
 
+        // Check if file exists to show diff
+        let existing_content = fs::read_to_string(path).ok();
+
         fs::write(path, content)
           .map_err(|e| AnyError::msg(format!("Failed to write file: {}", e)))?;
-        Ok(format!("Successfully wrote to {}", path))
+
+        if let Some(old_content) = existing_content {
+          if old_content != content {
+            // Generate diff for existing file modification
+            let diff_chunks = diff(&old_content, content);
+            let mut diff_output = String::new();
+
+            for chunk in &diff_chunks {
+              match chunk {
+                Chunk::Equal(text) => {
+                  // Only show a few lines of context around changes
+                  let lines: Vec<&str> = text.lines().collect();
+                  if lines.len() > 6 {
+                    for line in lines.iter().take(3) {
+                      diff_output.push_str(&format!("  {}\n", line));
+                    }
+                    if lines.len() > 6 {
+                      diff_output.push_str("  ...\n");
+                    }
+                    for line in lines.iter().skip(lines.len().saturating_sub(3))
+                    {
+                      diff_output.push_str(&format!("  {}\n", line));
+                    }
+                  } else {
+                    for line in lines {
+                      diff_output.push_str(&format!("  {}\n", line));
+                    }
+                  }
+                }
+                Chunk::Delete(text) => {
+                  for line in text.lines() {
+                    diff_output
+                      .push_str(&format!("\x1b[31m- {}\x1b[0m\n", line));
+                  }
+                }
+                Chunk::Insert(text) => {
+                  for line in text.lines() {
+                    diff_output
+                      .push_str(&format!("\x1b[32m+ {}\x1b[0m\n", line));
+                  }
+                }
+              }
+            }
+
+            Ok(format!(
+              "Successfully updated {}\n\nDiff:\n{}\n\nFile has been updated with the changes.",
+              path, diff_output
+            ))
+          } else {
+            Ok(format!(
+              "File {} already contains the same content - no changes made",
+              path
+            ))
+          }
+        } else {
+          Ok(format!("Successfully created new file: {}", path))
+        }
       }
       "list_directory" => {
         let path = input["path"]
@@ -353,209 +706,99 @@ impl AiSession {
           ))
         }
       }
-      "get_jsr_docs" => {
+      "get_docs" => {
+        let module_path = input["module_path"]
+          .as_str()
+          .ok_or_else(|| AnyError::msg("Missing module_path"))?;
+        let filter = input["filter"].as_str();
+
+        self.generate_docs(module_path, filter).await
+      }
+      "edit_file" => {
+        let path = input["path"]
+          .as_str()
+          .ok_or_else(|| AnyError::msg("Missing path"))?;
+        let old_content = input["old_content"]
+          .as_str()
+          .ok_or_else(|| AnyError::msg("Missing old_content"))?;
+        let new_content = input["new_content"]
+          .as_str()
+          .ok_or_else(|| AnyError::msg("Missing new_content"))?;
+
+        self.edit_file(path, old_content, new_content)
+      }
+      "jsr_search_packages" => {
+        let query = input["query"]
+          .as_str()
+          .ok_or_else(|| AnyError::msg("Missing query"))?;
+        let limit = input["limit"].as_u64().unwrap_or(20);
+        let page = input["page"].as_u64().unwrap_or(1);
+
+        self.jsr_search_packages(query, limit, page).await
+      }
+      "jsr_get_package" => {
         let scope = input["scope"]
           .as_str()
           .ok_or_else(|| AnyError::msg("Missing scope"))?;
         let package = input["package"]
           .as_str()
           .ok_or_else(|| AnyError::msg("Missing package"))?;
-        let version = input["version"].as_str();
 
-        // Get the latest version if not specified
-        let version_to_use = if let Some(v) = version {
-          v.to_string()
-        } else {
-          // First get the package info to find the latest version
-          let package_url =
-            format!("https://api.jsr.io/scopes/{}/packages/{}", scope, package);
-          let package_response =
-            self.client.get(&package_url).send().await.map_err(|e| {
-              AnyError::msg(format!("Failed to fetch package info: {}", e))
-            })?;
-
-          if !package_response.status().is_success() {
-            return Err(AnyError::msg(format!(
-              "Package @{}/{} not found or API error",
-              scope, package
-            )));
-          }
-
-          // Get the versions list
-          let versions_url = format!(
-            "https://api.jsr.io/scopes/{}/packages/{}/versions",
-            scope, package
-          );
-          let versions_response =
-            self.client.get(&versions_url).send().await.map_err(|e| {
-              AnyError::msg(format!("Failed to fetch versions: {}", e))
-            })?;
-
-          let versions: Vec<serde_json::Value> =
-            versions_response.json().await.map_err(|e| {
-              AnyError::msg(format!("Failed to parse versions: {}", e))
-            })?;
-
-          versions
-            .first()
-            .and_then(|v| v["version"].as_str())
-            .unwrap_or("latest")
-            .to_string()
-        };
-
-        // Get the documentation
-        let docs_url = format!(
-          "https://api.jsr.io/scopes/{}/packages/{}/versions/{}/docs",
-          scope, package, version_to_use
-        );
-
-        let docs_response =
-          self.client.get(&docs_url).send().await.map_err(|e| {
-            AnyError::msg(format!("Failed to fetch docs: {}", e))
-          })?;
-
-        if !docs_response.status().is_success() {
-          return Err(AnyError::msg(format!(
-            "Documentation for @{}/{}@{} not found or API error",
-            scope, package, version_to_use
-          )));
-        }
-
-        let docs_json: serde_json::Value = docs_response
-          .json()
-          .await
-          .map_err(|e| AnyError::msg(format!("Failed to parse docs: {}", e)))?;
-
-        // Extract the main documentation content and TOC
-        let main_docs = docs_json["main"]
-          .as_str()
-          .unwrap_or("No main documentation available");
-        let toc = docs_json["toc"].as_str().unwrap_or("");
-
-        // Parse the TOC to extract structured information about available symbols
-        let mut api_docs = String::new();
-
-        // The TOC contains HTML with links to different symbols and modules
-        // Extract useful information from it
-        if !toc.is_empty() {
-          api_docs.push_str("\n\n## API Reference\n");
-
-          // Simple HTML parsing to extract useful information
-          // Look for common patterns in JSR TOC
-          let lines: Vec<&str> = toc.lines().collect();
-
-          for line in lines {
-            let trimmed = line.trim();
-
-            // Look for section headers (h2, h3, etc.)
-            if trimmed.contains("<h")
-              && (trimmed.contains("Functions")
-                || trimmed.contains("Classes")
-                || trimmed.contains("Interfaces")
-                || trimmed.contains("Types")
-                || trimmed.contains("Variables"))
-            {
-              if let Some(start) = trimmed.find('>') {
-                if let Some(end) = trimmed.rfind('<') {
-                  if start < end {
-                    let section_title = &trimmed[start + 1..end];
-                    api_docs.push_str(&format!("\n### {}\n", section_title));
-                  }
-                }
-              }
-            }
-
-            // Look for function/class/interface definitions
-            if trimmed.contains("<a href")
-              && (trimmed.contains("function ")
-                || trimmed.contains("class ")
-                || trimmed.contains("interface ")
-                || trimmed.contains("type "))
-            {
-              // Extract the symbol name and description
-              if let Some(href_start) = trimmed.find("href=") {
-                if let Some(href_end) = trimmed[href_start..].find('>') {
-                  if let Some(link_end) =
-                    trimmed[href_start + href_end..].find("</a>")
-                  {
-                    let link_content = &trimmed[href_start + href_end + 1
-                      ..href_start + href_end + link_end];
-                    if !link_content.trim().is_empty() {
-                      api_docs
-                        .push_str(&format!("- {}\n", link_content.trim()));
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-
-        // If we didn't extract much from TOC, fall back to a simple structure
-        if api_docs.len() < 50 && !toc.is_empty() {
-          api_docs = "\n\n## API Reference\nSee the table of contents above for available functions, classes, and types.".to_string();
-        }
-
-        // Instead of truncating, let's be more selective about what we include
-        // Focus on the most useful parts for coding assistance
-        let mut focused_result = format!(
-          "JSR Package: @{}/{} v{}\n\n",
-          scope, package, version_to_use
-        );
-
-        // Extract key information from main docs (first few paragraphs, examples)
-        let main_lines: Vec<&str> = main_docs.lines().collect();
-        let mut included_lines = 0;
-        let mut in_example = false;
-
-        for line in main_lines.iter().take(100) {
-          // Reasonable limit
-          let trimmed = line.trim();
-
-          // Always include headers, descriptions, and examples
-          if trimmed.starts_with('#')
-            || trimmed.starts_with("```")
-            || trimmed.contains("Example")
-            || trimmed.contains("Usage")
-            || (included_lines < 20 && !trimmed.is_empty())
-          {
-            if trimmed.starts_with("```") {
-              in_example = !in_example;
-            }
-
-            focused_result.push_str(line);
-            focused_result.push('\n');
-            included_lines += 1;
-          } else if in_example {
-            // Include example content
-            focused_result.push_str(line);
-            focused_result.push('\n');
-          }
-
-          // Stop if we have enough content and we're not in an example
-          if included_lines > 50 && !in_example {
-            break;
-          }
-        }
-
-        // Always include the API reference if we extracted it
-        if !api_docs.is_empty() {
-          focused_result.push_str(&api_docs);
-        }
-
-        Ok(focused_result)
+        self.jsr_get_package(scope, package).await
       }
-      _ => Err(AnyError::msg(format!("Unknown tool: {}", name))),
+      "jsr_get_package_versions" => {
+        let scope = input["scope"]
+          .as_str()
+          .ok_or_else(|| AnyError::msg("Missing scope"))?;
+        let package = input["package"]
+          .as_str()
+          .ok_or_else(|| AnyError::msg("Missing package"))?;
+
+        self.jsr_get_package_versions(scope, package).await
+      }
+      "jsr_get_package_version" => {
+        let scope = input["scope"]
+          .as_str()
+          .ok_or_else(|| AnyError::msg("Missing scope"))?;
+        let package = input["package"]
+          .as_str()
+          .ok_or_else(|| AnyError::msg("Missing package"))?;
+        let version = input["version"]
+          .as_str()
+          .ok_or_else(|| AnyError::msg("Missing version"))?;
+
+        self.jsr_get_package_version(scope, package, version).await
+      }
+      "jsr_get_package_dependencies" => {
+        let scope = input["scope"]
+          .as_str()
+          .ok_or_else(|| AnyError::msg("Missing scope"))?;
+        let package = input["package"]
+          .as_str()
+          .ok_or_else(|| AnyError::msg("Missing package"))?;
+        let version = input["version"]
+          .as_str()
+          .ok_or_else(|| AnyError::msg("Missing version"))?;
+
+        self
+          .jsr_get_package_dependencies(scope, package, version)
+          .await
+      }
+      _ => {
+        // Check if it's a custom tool
+        if let Some(_custom_tool) =
+          self.custom_tools.iter().find(|t| t.name == name)
+        {
+          self.execute_custom_tool(name, input).await
+        } else {
+          Err(AnyError::msg(format!("Unknown tool: {}", name)))
+        }
+      }
     };
 
     match &result {
       Ok(output) => {
-        let preview = if output.len() > 50 {
-          format!("{}...", &output[..47])
-        } else {
-          output.clone()
-        };
-        loader.stop(Some(&preview));
+        loader.stop(None);
       }
       Err(e) => {
         loader.error(&e.to_string());
@@ -563,6 +806,532 @@ impl AiSession {
     }
 
     result
+  }
+
+  async fn execute_custom_tool(
+    &self,
+    name: &str,
+    input: &serde_json::Value,
+  ) -> Result<String, AnyError> {
+    let config_path = self
+      .custom_tools_config
+      .as_ref()
+      .ok_or_else(|| AnyError::msg("No custom tools config path available"))?;
+
+    let config_specifier = ModuleSpecifier::from_file_path(config_path)
+      .map_err(|_| {
+        AnyError::msg("Failed to convert config path to module specifier")
+      })?;
+
+    let permissions = PermissionsContainer::allow_all(
+      self.cli_factory.permission_desc_parser()?.clone(),
+    );
+
+    let mut worker = self
+      .worker_factory
+      .create_custom_worker(
+        WorkerExecutionMode::Run,
+        config_specifier,
+        vec![],
+        permissions,
+        vec![],
+        Stdio::default(),
+        None,
+      )
+      .await
+      .map_err(|e| {
+        AnyError::msg(format!(
+          "Failed to create worker for tool execution: {}",
+          e
+        ))
+      })?;
+
+    worker.execute_main_module().await.map_err(|e| {
+      AnyError::msg(format!("Failed to execute custom tool: {}", e))
+    })?;
+
+    // Execute the tool using execute_script with dynamic strings
+    let execute_script = format!(
+      r#"
+      if (!globalThis.tools) {{
+        throw new Error("No globalThis.tools found. Please set globalThis.tools in your config file.");
+      }}
+      const tool = globalThis.tools.find(t => t.name === "{}");
+      if (!tool) {{
+        throw new Error("Tool not found: {}");
+      }}
+      if (!tool.fn) {{
+        throw new Error("Tool '{}' has no function defined");
+      }}
+      tool.fn({})
+      "#,
+      name, name, name, input
+    );
+
+    // Convert the worker to MainWorker to access js_runtime
+    let mut main_worker = worker.into_main_worker();
+    let result_value = main_worker
+      .execute_script("execute_tool", execute_script.into())
+      .map_err(|e| {
+        AnyError::msg(format!("Failed to execute tool '{}': {}", name, e))
+      })?;
+
+    let runtime = &mut main_worker.js_runtime;
+    let scope = &mut runtime.handle_scope();
+    let result_local = deno_core::v8::Local::new(scope, result_value);
+    let result_json: serde_json::Value =
+      deno_core::serde_v8::from_v8(scope, result_local).map_err(|e| {
+        AnyError::msg(format!("Failed to deserialize result: {}", e))
+      })?;
+
+    Ok(serde_json::to_string(&result_json)?)
+  }
+
+  async fn generate_docs(
+    &self,
+    module_path: &str,
+    filter: Option<&str>,
+  ) -> Result<String, AnyError> {
+    // Build the deno doc command
+    let mut cmd = std::process::Command::new("deno");
+    cmd.arg("doc").arg(module_path).current_dir(&self.cwd);
+
+    // If filter is provided, add it as an additional argument
+    if let Some(filter_str) = filter {
+      cmd.arg(filter_str);
+    }
+
+    // Execute the command
+    let output = cmd.output().map_err(|e| {
+      AnyError::msg(format!("Failed to execute deno doc command: {}", e))
+    })?;
+
+    if !output.status.success() {
+      let stderr = String::from_utf8_lossy(&output.stderr);
+      return Err(AnyError::msg(format!(
+        "deno doc command failed: {}",
+        stderr
+      )));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    if stdout.trim().is_empty() {
+      return Ok(format!(
+        "No documentation found for: {}\nMake sure the module path is correct and accessible.",
+        module_path
+      ));
+    }
+
+    // Return the nicely formatted output from deno doc
+    let mut result = format!("Documentation for: {}\n\n", module_path);
+    result.push_str(&stdout);
+
+    if let Some(filter_str) = filter {
+      result.push_str(&format!("\n\nFiltered by: '{}'", filter_str));
+    }
+
+    Ok(result)
+  }
+
+  fn edit_file(
+    &self,
+    path: &str,
+    old_content: &str,
+    new_content: &str,
+  ) -> Result<String, AnyError> {
+    // Read the current file content
+    let current_content = fs::read_to_string(path)
+      .map_err(|e| AnyError::msg(format!("Failed to read file: {}", e)))?;
+
+    // Check if old_content exists in the file
+    if !current_content.contains(old_content) {
+      return Err(AnyError::msg(format!(
+        "Content to replace not found in file. Please check that the old_content exactly matches what's in the file."
+      )));
+    }
+
+    // Replace the content
+    let new_file_content = current_content.replace(old_content, new_content);
+
+    // Generate diff for preview
+    let diff_chunks = diff(&current_content, &new_file_content);
+    let mut diff_output = String::new();
+
+    for chunk in &diff_chunks {
+      match chunk {
+        Chunk::Equal(text) => {
+          // Only show a few lines of context around changes
+          let lines: Vec<&str> = text.lines().collect();
+          if lines.len() > 6 {
+            for line in lines.iter().take(3) {
+              diff_output.push_str(&format!("  {}\n", line));
+            }
+            if lines.len() > 6 {
+              diff_output.push_str("  ...\n");
+            }
+            for line in lines.iter().skip(lines.len().saturating_sub(3)) {
+              diff_output.push_str(&format!("  {}\n", line));
+            }
+          } else {
+            for line in lines {
+              diff_output.push_str(&format!("  {}\n", line));
+            }
+          }
+        }
+        Chunk::Delete(text) => {
+          for line in text.lines() {
+            diff_output.push_str(&format!("\x1b[31m- {}\x1b[0m\n", line));
+          }
+        }
+        Chunk::Insert(text) => {
+          for line in text.lines() {
+            diff_output.push_str(&format!("\x1b[32m+ {}\x1b[0m\n", line));
+          }
+        }
+      }
+    }
+
+    // Write the new content to the file
+    if let Some(parent) = Path::new(path).parent() {
+      fs::create_dir_all(parent).map_err(|e| {
+        AnyError::msg(format!("Failed to create directories: {}", e))
+      })?;
+    }
+
+    fs::write(path, &new_file_content)
+      .map_err(|e| AnyError::msg(format!("Failed to write file: {}", e)))?;
+
+    Ok(format!(
+      "Successfully edited {}\n\nDiff:\n{}\n\nFile has been updated with the changes.",
+      path, diff_output
+    ))
+  }
+
+  async fn jsr_search_packages(
+    &self,
+    query: &str,
+    limit: u64,
+    page: u64,
+  ) -> Result<String, AnyError> {
+    let url = format!(
+      "https://api.jsr.io/packages?query={}&limit={}&page={}",
+      utf8_percent_encode(query, NON_ALPHANUMERIC),
+      limit,
+      page
+    );
+
+    let response = self.client.get(&url).send().await.map_err(|e| {
+      AnyError::msg(format!("Failed to search JSR packages: {}", e))
+    })?;
+
+    if !response.status().is_success() {
+      return Err(AnyError::msg(format!(
+        "JSR API error: {}",
+        response.status()
+      )));
+    }
+
+    let body = response
+      .text()
+      .await
+      .map_err(|e| AnyError::msg(format!("Failed to read response: {}", e)))?;
+
+    let json: serde_json::Value = serde_json::from_str(&body)
+      .map_err(|e| AnyError::msg(format!("Failed to parse JSON: {}", e)))?;
+
+    let mut result = format!("Found JSR packages for query '{}':\n\n", query);
+
+    if let Some(items) = json["items"].as_array() {
+      for (i, item) in items.iter().enumerate() {
+        let scope = item["scope"].as_str().unwrap_or("unknown");
+        let name = item["name"].as_str().unwrap_or("unknown");
+        let description =
+          item["description"].as_str().unwrap_or("No description");
+        let score = item["score"].as_f64().unwrap_or(0.0);
+
+        result.push_str(&format!(
+          "{}. @{}/{}\n   Description: {}\n   Score: {:.2}\n\n",
+          i + 1,
+          scope,
+          name,
+          description,
+          score
+        ));
+      }
+
+      if let Some(total) = json["total"].as_u64() {
+        result.push_str(&format!("Total results: {} packages", total));
+      }
+    } else {
+      result.push_str("No packages found.");
+    }
+
+    Ok(result)
+  }
+
+  async fn jsr_get_package(
+    &self,
+    scope: &str,
+    package: &str,
+  ) -> Result<String, AnyError> {
+    let url =
+      format!("https://api.jsr.io/scopes/{}/packages/{}", scope, package);
+
+    let response = self.client.get(&url).send().await.map_err(|e| {
+      AnyError::msg(format!("Failed to get JSR package: {}", e))
+    })?;
+
+    if !response.status().is_success() {
+      return Err(AnyError::msg(format!(
+        "JSR API error: {} - Package @{}/{} not found",
+        response.status(),
+        scope,
+        package
+      )));
+    }
+
+    let body = response
+      .text()
+      .await
+      .map_err(|e| AnyError::msg(format!("Failed to read response: {}", e)))?;
+
+    let json: serde_json::Value = serde_json::from_str(&body)
+      .map_err(|e| AnyError::msg(format!("Failed to parse JSON: {}", e)))?;
+
+    let mut result = format!("Package: @{}/{}\n\n", scope, package);
+
+    if let Some(description) = json["description"].as_str() {
+      result.push_str(&format!("Description: {}\n", description));
+    }
+
+    if let Some(score) = json["score"].as_f64() {
+      result.push_str(&format!("Score: {:.2}\n", score));
+    }
+
+    if let Some(runtime_compat) = json["runtimeCompat"].as_object() {
+      result.push_str("\nRuntime Compatibility:\n");
+      if let Some(deno) = runtime_compat["deno"].as_bool() {
+        result
+          .push_str(&format!("  Deno: {}\n", if deno { "✅" } else { "❌" }));
+      }
+      if let Some(node) = runtime_compat["node"].as_bool() {
+        result.push_str(&format!(
+          "  Node.js: {}\n",
+          if node { "✅" } else { "❌" }
+        ));
+      }
+      if let Some(browser) = runtime_compat["browser"].as_bool() {
+        result.push_str(&format!(
+          "  Browser: {}\n",
+          if browser { "✅" } else { "❌" }
+        ));
+      }
+    }
+
+    if let Some(created_at) = json["createdAt"].as_str() {
+      result.push_str(&format!("\nCreated: {}\n", created_at));
+    }
+
+    if let Some(updated_at) = json["updatedAt"].as_str() {
+      result.push_str(&format!("Updated: {}\n", updated_at));
+    }
+
+    if let Some(gh_repo) = json["githubRepository"].as_object() {
+      if let (Some(owner), Some(repo)) =
+        (gh_repo["owner"].as_str(), gh_repo["name"].as_str())
+      {
+        result.push_str(&format!(
+          "GitHub: https://github.com/{}/{}\n",
+          owner, repo
+        ));
+      }
+    }
+
+    Ok(result)
+  }
+
+  async fn jsr_get_package_versions(
+    &self,
+    scope: &str,
+    package: &str,
+  ) -> Result<String, AnyError> {
+    let url = format!(
+      "https://api.jsr.io/scopes/{}/packages/{}/versions",
+      scope, package
+    );
+
+    let response = self.client.get(&url).send().await.map_err(|e| {
+      AnyError::msg(format!("Failed to get JSR package versions: {}", e))
+    })?;
+
+    if !response.status().is_success() {
+      return Err(AnyError::msg(format!(
+        "JSR API error: {} - Package @{}/{} not found",
+        response.status(),
+        scope,
+        package
+      )));
+    }
+
+    let body = response
+      .text()
+      .await
+      .map_err(|e| AnyError::msg(format!("Failed to read response: {}", e)))?;
+
+    let versions: serde_json::Value = serde_json::from_str(&body)
+      .map_err(|e| AnyError::msg(format!("Failed to parse JSON: {}", e)))?;
+
+    let mut result = format!("Versions for @{}/{}:\n\n", scope, package);
+
+    if let Some(version_list) = versions.as_array() {
+      for (i, version) in version_list.iter().enumerate() {
+        let version_num = version["version"].as_str().unwrap_or("unknown");
+        let created_at = version["createdAt"].as_str().unwrap_or("unknown");
+        let yanked = version["yanked"].as_bool().unwrap_or(false);
+
+        result.push_str(&format!(
+          "{}. {} {}\n   Created: {}\n",
+          i + 1,
+          version_num,
+          if yanked { "(yanked)" } else { "" },
+          created_at
+        ));
+      }
+    } else {
+      result.push_str("No versions found.");
+    }
+
+    Ok(result)
+  }
+
+  async fn jsr_get_package_version(
+    &self,
+    scope: &str,
+    package: &str,
+    version: &str,
+  ) -> Result<String, AnyError> {
+    let url = format!(
+      "https://api.jsr.io/scopes/{}/packages/{}/versions/{}",
+      scope, package, version
+    );
+
+    let response = self.client.get(&url).send().await.map_err(|e| {
+      AnyError::msg(format!("Failed to get JSR package version: {}", e))
+    })?;
+
+    if !response.status().is_success() {
+      return Err(AnyError::msg(format!(
+        "JSR API error: {} - Version {} of package @{}/{} not found",
+        response.status(),
+        version,
+        scope,
+        package
+      )));
+    }
+
+    let body = response
+      .text()
+      .await
+      .map_err(|e| AnyError::msg(format!("Failed to read response: {}", e)))?;
+
+    let json: serde_json::Value = serde_json::from_str(&body)
+      .map_err(|e| AnyError::msg(format!("Failed to parse JSON: {}", e)))?;
+
+    let mut result =
+      format!("Package Version: @{}/{}@{}\n\n", scope, package, version);
+
+    if let Some(yanked) = json["yanked"].as_bool() {
+      if yanked {
+        result.push_str("⚠️  This version has been yanked\n\n");
+      }
+    }
+
+    if let Some(created_at) = json["createdAt"].as_str() {
+      result.push_str(&format!("Created: {}\n", created_at));
+    }
+
+    if let Some(updated_at) = json["updatedAt"].as_str() {
+      result.push_str(&format!("Updated: {}\n", updated_at));
+    }
+
+    if let Some(rekor_log_id) = json["rekorLogId"].as_str() {
+      result.push_str(&format!("Rekor Log ID: {}\n", rekor_log_id));
+    }
+
+    Ok(result)
+  }
+
+  async fn jsr_get_package_dependencies(
+    &self,
+    scope: &str,
+    package: &str,
+    version: &str,
+  ) -> Result<String, AnyError> {
+    let url = format!(
+      "https://api.jsr.io/scopes/{}/packages/{}/versions/{}/dependencies",
+      scope, package, version
+    );
+
+    let response = self.client.get(&url).send().await.map_err(|e| {
+      AnyError::msg(format!("Failed to get JSR package dependencies: {}", e))
+    })?;
+
+    if !response.status().is_success() {
+      return Err(AnyError::msg(format!(
+        "JSR API error: {} - Dependencies for @{}/{}@{} not found",
+        response.status(),
+        scope,
+        package,
+        version
+      )));
+    }
+
+    let body = response
+      .text()
+      .await
+      .map_err(|e| AnyError::msg(format!("Failed to read response: {}", e)))?;
+
+    let dependencies: serde_json::Value = serde_json::from_str(&body)
+      .map_err(|e| AnyError::msg(format!("Failed to parse JSON: {}", e)))?;
+
+    let mut result =
+      format!("Dependencies for @{}/{}@{}:\n\n", scope, package, version);
+
+    if let Some(deps_list) = dependencies.as_array() {
+      if deps_list.is_empty() {
+        result.push_str("No dependencies found.");
+      } else {
+        for (i, dep) in deps_list.iter().enumerate() {
+          let kind = dep["kind"].as_str().unwrap_or("unknown");
+          let name = dep["name"].as_str().unwrap_or("unknown");
+          let constraint = dep["constraint"].as_str().unwrap_or("unknown");
+          let path = dep["path"].as_str().unwrap_or("");
+
+          result.push_str(&format!(
+            "{}. {} {}\n   Type: {}\n   Constraint: {}\n",
+            i + 1,
+            name,
+            if path.is_empty() {
+              ""
+            } else {
+              &format!(" ({})", path)
+            },
+            kind,
+            constraint
+          ));
+
+          if !path.is_empty() {
+            result.push_str(&format!("   Import Path: {}\n", path));
+          }
+          result.push('\n');
+        }
+      }
+    } else {
+      result.push_str("No dependencies found.");
+    }
+
+    Ok(result)
   }
 
   async fn send_message(&mut self, user_input: &str) -> Result<(), AnyError> {
@@ -573,11 +1342,8 @@ impl AiSession {
     });
 
     loop {
-      let mut api_loader = LoadingIndicator::new(format!(
-        "Calling {} API ({})",
-        self.model_provider.to_uppercase(),
-        self.model_name
-      ));
+      let mut api_loader =
+        LoadingIndicator::new(format!("Thinking ({})", self.model_name));
       api_loader.start();
 
       let response_result = if self.model_provider == "anthropic" {
@@ -591,7 +1357,7 @@ impl AiSession {
 
       let response = match response_result {
         Ok(resp) => {
-          api_loader.stop(Some("Response received"));
+          api_loader.stop(Some(&format!("({})", resp.content.len())));
           resp
         }
         Err(e) => {
@@ -639,17 +1405,9 @@ impl AiSession {
         let mut tool_results = Vec::new();
 
         for (tool_use_id, tool_name, tool_input) in tool_calls {
-          println!(
-            "\nExecuting tool: {} with input: {}",
-            tool_name, tool_input
-          );
-
           let result = self.execute_tool(&tool_name, &tool_input).await;
           let result_text = match result {
-            Ok(output) => {
-              println!("Tool output: {}", output);
-              output
-            }
+            Ok(output) => output,
             Err(e) => {
               let error_msg = format!("Error: {}", e);
               println!("Tool error: {}", error_msg);
@@ -686,7 +1444,7 @@ impl AiSession {
       model: self.model_name.clone(),
       max_tokens: 4096,
       messages: self.conversation.clone(),
-      tools: Some(Self::get_mcp_tools()),
+      tools: Some(self.get_all_tools()),
       stream: false,
     };
 
@@ -813,7 +1571,7 @@ impl AiSession {
 
   async fn call_openai(&self) -> Result<AnthropicResponse, AnyError> {
     let openai_messages = self.convert_conversation_to_openai();
-    let openai_tools = Self::convert_tools_to_openai(&Self::get_mcp_tools());
+    let openai_tools = Self::convert_tools_to_openai(&self.get_all_tools());
 
     let request = OpenAIRequest {
       model: self.model_name.clone(),
@@ -884,9 +1642,8 @@ impl AiSession {
   }
 }
 
-pub async fn go(_flags: Arc<Flags>) -> Result<(), AnyError> {
-  println!("Deno AI - Coding Assistant");
-  println!("Type 'exit' to quit, ':help' for commands\n");
+pub async fn go(flags: Arc<Flags>, ai_flags: AiFlags) -> Result<(), AnyError> {
+  println!("deno ai agent");
 
   // Get API configuration
   let model_provider =
@@ -914,24 +1671,44 @@ pub async fn go(_flags: Arc<Flags>) -> Result<(), AnyError> {
     _ => unreachable!(),
   };
 
-  println!("Using {} with model: {}\n", model_provider, model_name);
+  println!("Using {} with model: {}", model_provider, model_name);
+  println!("Type 'exit' to quit, ':help' for commands\n");
 
-  let mut ai_session = AiSession::new(model_provider, model_name, api_key);
+  // Create CLI factory and worker factory
+  let factory = Arc::new(CliFactory::from_flags(flags));
+  let worker_factory =
+    Arc::new(factory.create_cli_main_worker_factory().await?);
+
+  let custom_tools_config =
+    ai_flags.config.map(|p| std::fs::canonicalize(&p).unwrap());
+  let mut ai_session = AiSession::new(
+    model_provider,
+    model_name,
+    api_key,
+    custom_tools_config,
+    worker_factory,
+    factory,
+  );
+
+  // Load custom tools if config is provided
+  if let Err(e) = ai_session.load_custom_tools().await {
+    eprintln!("Warning: Failed to load custom tools: {}", e);
+  }
   let mut rl = Editor::<(), DefaultHistory>::new()?;
 
   // Add initial system context
   ai_session.conversation.push(AnthropicMessage {
     role: "user".to_string(),
     content: MessageContent::Text(format!(
-      "You are a helpful coding assistant running in Deno. The current working directory is: {}. \
-       You have access to tools for reading/writing files, listing directories, and executing commands. \
-       Help the user with their coding tasks.",
+      "{}. Current working directory: {}",
+      include_str!("ai.md"),
       ai_session.cwd
     )),
   });
 
   loop {
-    let line = match rl.readline(">> ") {
+    let prompt_text_gray = "\x1b[90m>> \x1b[0m";
+    let line = match rl.readline(prompt_text_gray) {
       Ok(line) => line,
       Err(ReadlineError::Interrupted) => {
         println!("^C");
@@ -967,7 +1744,7 @@ pub async fn go(_flags: Arc<Flags>) -> Result<(), AnyError> {
         println!("ANTHROPIC_API_KEY - Your Anthropic API key");
         println!("OPENAI_API_KEY - Your OpenAI API key");
         println!(
-          "\nAvailable tools:\n- read_file: Read file contents\n- write_file: Write/create files\n- list_directory: List directory contents\n- execute_command: Run shell commands\n- get_jsr_docs: Get documentation for JSR modules"
+          "\nAvailable tools:\n- read_file: Read file contents\n- write_file: Write/create files\n- edit_file: Edit files with diff preview\n- list_directory: List directory contents\n- execute_command: Run shell commands\n- get_docs: Generate documentation for any module using deno_doc\n- jsr_search_packages: Search for packages on JSR registry\n- jsr_get_package: Get detailed information about a JSR package\n- jsr_get_package_versions: Get all versions of a JSR package\n- jsr_get_package_version: Get details about a specific package version\n- jsr_get_package_dependencies: Get dependencies of a package version"
         );
         continue;
       }
