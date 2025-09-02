@@ -117,6 +117,9 @@ async fn run_subcommand(
     DenoSubcommand::Add(add_flags) => spawn_subcommand(async {
       tools::pm::add(flags, add_flags, tools::pm::AddCommandName::Add).await
     }),
+    DenoSubcommand::Ai => spawn_subcommand(async move {
+      tools::ai::go(flags).await
+    }),
     DenoSubcommand::Remove(remove_flags) => {
       spawn_subcommand(async { tools::pm::remove(flags, remove_flags).await })
     }

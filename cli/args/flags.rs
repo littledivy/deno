@@ -546,6 +546,7 @@ impl std::fmt::Display for PackageHandling {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DenoSubcommand {
   Add(AddFlags),
+  Ai,
   Remove(RemoveFlags),
   Bench(BenchFlags),
   Bundle(BundleFlags),
@@ -1514,6 +1515,7 @@ pub fn flags_from_vec(args: Vec<OsString>) -> clap::error::Result<Flags> {
 
       match subcommand.as_str() {
         "add" => add_parse(&mut flags, &mut m)?,
+        "ai" => ai_parse(&mut flags, &mut m),
         "remove" => remove_parse(&mut flags, &mut m),
         "bench" => bench_parse(&mut flags, &mut m)?,
         "bundle" => bundle_parse(&mut flags, &mut m)?,
@@ -1776,6 +1778,7 @@ pub fn clap_root() -> Command {
     .defer(|cmd| {
       let cmd = cmd
         .subcommand(add_subcommand())
+        .subcommand(ai_subcommand())
         .subcommand(remove_subcommand())
         .subcommand(bench_subcommand())
         .subcommand(bundle_subcommand())
@@ -1889,6 +1892,16 @@ fn default_registry_args() -> [Arg; 2] {
       .action(ArgAction::SetTrue)
       .conflicts_with("npm"),
   ]
+}
+
+fn ai_subcommand() -> Command {
+  command(
+    "ai",
+    cstr!("Deno AI assistant commands.
+
+This is an experimental AI subcommand for Deno."),
+    UnstableArgsConfig::None,
+  )
 }
 
 fn remove_subcommand() -> Command {
@@ -4936,6 +4949,10 @@ fn add_parse(
   lock_args_parse(flags, matches);
   flags.subcommand = DenoSubcommand::Add(add_parse_inner(matches, None));
   Ok(())
+}
+
+fn ai_parse(flags: &mut Flags, _matches: &mut ArgMatches) {
+  flags.subcommand = DenoSubcommand::Ai;
 }
 
 fn add_parse_inner(

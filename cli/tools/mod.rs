@@ -1,5 +1,6 @@
 // Copyright 2018-2025 the Deno authors. MIT license.
 
+pub mod ai;
 pub mod bench;
 pub mod bundle;
 pub mod check;
