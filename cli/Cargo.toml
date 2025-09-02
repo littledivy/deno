@@ -157,6 +157,7 @@ pretty_yaml.workspace = true
 quick-junit.workspace = true
 rand = { workspace = true, features = ["small_rng"] }
 regex.workspace = true
+reqwest.workspace = true
 rustc-hash.workspace = true
 rustls.workspace = true
 rustyline.workspace = true
@@ -174,6 +175,7 @@ text-size.workspace = true
 text_lines.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-stream = "0.1"
 tokio-util.workspace = true
 tower.workspace = true
 tower-lsp.workspace = true

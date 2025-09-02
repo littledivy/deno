@@ -1897,9 +1897,11 @@ fn default_registry_args() -> [Arg; 2] {
 fn ai_subcommand() -> Command {
   command(
     "ai",
-    cstr!("Deno AI assistant commands.
+    cstr!(
+      "Deno AI assistant commands.
 
-This is an experimental AI subcommand for Deno."),
+This is an experimental AI subcommand for Deno."
+    ),
     UnstableArgsConfig::None,
   )
 }
