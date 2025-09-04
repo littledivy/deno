@@ -33,4 +33,4 @@ const tools = [
   },
 ];
 
-globalThis.tools = tools;
+globalThis.tools = tools; // export default tool;
