@@ -186,7 +186,6 @@ export class TLSSocket extends net.Socket {
       }
 
       const { promise, resolve } = Promise.withResolvers();
-
       // Set `afterConnectTls` hook. This is called in the `afterConnect` method of net.Socket
       handle.afterConnectTls = async () => {
         options.hostname ??= undefined; // coerce to undefined if null, startTls expects hostname to be undefined
@@ -233,6 +232,7 @@ export class TLSSocket extends net.Socket {
       };
 
       handle.upgrading = promise;
+
       handle.verifyError = function () {
         return null; // Never fails, rejectUnauthorized is always true in Deno.
       };
@@ -309,22 +309,32 @@ class JSStreamSocket {
       core.write(channelRid, data);
     });
 
+	  const orgEmit = this.stream.emit;
+	  this.stream.emit = (event, ...args) => {
+		  const result = orgEmit.call(this.stream, event, ...args);
+		  console.debug(`JSStreamSocket stream.emit: ${event}`);
+		  return result;
+	  };
+    this.stream.once("pause", () => {
+      core.close(this.#rid);
+      core.close(channelRid);
+    });
+
     const buf = new Uint8Array(1024 * 16);
     (async () => {
       while (true) {
         try {
-          const nread = await core.read(channelRid, buf);
+	  const nread = await core.read(channelRid, buf);
           this.stream.write(buf.slice(0, nread));
         } catch {
           break;
         }
       }
     })();
+  }
 
-    this.stream.on("close", () => {
-      core.close(this.#rid);
-      core.close(channelRid);
-    });
+  close() {
+    core.close(this.#rid);
   }
 
   handshake() {

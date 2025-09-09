@@ -14,11 +14,13 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::task::Context;
 use std::task::Poll;
+use deno_core::CancelFuture;
 
 use base64::Engine;
 use bytes::Bytes;
 use deno_core::AsyncRefCell;
 use deno_core::AsyncResult;
+use deno_core::CancelHandle;
 use deno_core::OpState;
 use deno_core::RcRef;
 use deno_core::Resource;
@@ -312,6 +314,7 @@ struct JSDuplexResource {
   readable: Arc<Mutex<tokio::sync::mpsc::Receiver<Bytes>>>,
   writable: tokio::sync::mpsc::Sender<Bytes>,
   read_buffer: Arc<Mutex<VecDeque<Bytes>>>,
+  cancel_handle: Rc<CancelHandle>,
 }
 
 impl JSDuplexResource {
@@ -323,6 +326,7 @@ impl JSDuplexResource {
       readable: Arc::new(Mutex::new(readable)),
       writable,
       read_buffer: Arc::new(Mutex::new(VecDeque::new())),
+      cancel_handle: CancelHandle::new_rc(),
     }
   }
 
@@ -352,7 +356,10 @@ impl JSDuplexResource {
         .readable
         .lock()
         .map_err(|_| Error::other("Failed to acquire lock"))?;
-      receiver.recv().await
+      receiver
+          .recv()
+          .or_cancel(&self.cancel_handle)
+          .await?
     };
 
     match bytes {
@@ -398,6 +405,10 @@ impl Resource for JSDuplexResource {
 
   fn name(&self) -> Cow<'_, str> {
     "JSDuplexResource".into()
+  }
+
+  fn close(self: Rc<Self>) {
+    self.cancel_handle.cancel();
   }
 }
 

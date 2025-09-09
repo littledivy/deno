@@ -1352,6 +1352,7 @@ Readable.prototype.pause = function () {
     debug("pause");
     state[kState] |= kHasFlowing;
     state[kState] &= ~kFlowing;
+	  console.log(this);
     this.emit("pause");
   }
   state[kState] |= kHasPaused | kPaused;
