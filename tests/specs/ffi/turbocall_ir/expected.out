@@ -1,0 +1,499 @@
+; Slow turbocall IR
+function %add_u32_slow(i64, i64) -> i8 apple_aarch64 {
+    sig0 = (i32, i32) -> i32 apple_aarch64
+    sig1 = (i64, i32, i64) -> i32 apple_aarch64
+    sig2 = (i64, i32, i64) -> f64 apple_aarch64
+    sig3 = (i64, i32, i64) -> i64 apple_aarch64
+    sig4 = (i64, f64) apple_aarch64
+
+block0(v0: i64, v1: i64):
+    v2 = load.i64 notrap aligned v0+16
+    v3 = load.i64 notrap aligned v2+80
+    v6 = load.i64 notrap aligned v2+88
+    v7 = bor v3, v6
+    v10 = iconst.i64 1
+    v11 = band v7, v10  ; v10 = 1
+    v21 = iconst.i64 0
+    v12 = icmp ne v11, v21  ; v21 = 0
+    brif v12, block1, block2
+
+block2:
+    v13 = iconst.i64 <addr>
+    v19 = iconst.i64 32
+    v4 = sshr.i64 v3, v19  ; v19 = 32
+    v5 = ireduce.i32 v4
+    v8 = sshr.i64 v6, v19  ; v19 = 32
+    v9 = ireduce.i32 v8
+    v14 = call_indirect sig0, v13(v5, v9)  ; v13 = <addr>
+    v15 = uextend.i64 v14
+    v16 = ishl v15, v19  ; v19 = 32
+    store notrap aligned v16, v1
+    v17 = iconst.i8 1
+    return v17  ; v17 = 1
+
+block1 cold:
+    v18 = iconst.i8 0
+    return v18  ; v18 = 0
+}
+
+; Turbocall IR
+function %add_u32_wrapper(i64, i32, i32, i64) -> i32 apple_aarch64 {
+    sig0 = (i32, i32) -> i32 apple_aarch64
+    sig1 = (i64) -> i64 apple_aarch64
+    sig2 = (i64) apple_aarch64
+
+block0(v0: i64, v1: i32, v2: i32, v3: i64):
+    v4 = iconst.i64 <addr>
+    v5 = call_indirect sig0, v4(v1, v2)  ; v4 = <addr>
+    return v5
+}
+
+; Slow turbocall IR
+function %hash_slow(i64, i64) -> i8 apple_aarch64 {
+    ss0 = explicit_slot 1
+    sig0 = (i64, i32) -> i32 apple_aarch64
+    sig1 = (i64, i32, i64) -> i32 apple_aarch64
+    sig2 = (i64, i32, i64) -> f64 apple_aarch64
+    sig3 = (i64, i32, i64) -> i64 apple_aarch64
+    sig4 = (i64, f64) apple_aarch64
+
+block0(v0: i64, v1: i64):
+    v2 = iconst.i8 0
+    v23 = stack_addr.i64 ss0
+    store notrap v2, v23  ; v2 = 0
+    v4 = load.i64 notrap aligned v0+16
+    v6 = iconst.i64 <addr>
+    v5 = iconst.i32 0
+    v7 = call_indirect sig3, v6(v0, v5, v23)  ; v6 = <addr>, v5 = 0
+    v8 = load.i64 notrap aligned v4+88
+    v14 = load.i8 notrap v23
+    v11 = iconst.i64 1
+    v12 = band v8, v11  ; v11 = 1
+    v25 = iconst.i64 0
+    v13 = icmp ne v12, v25  ; v25 = 0
+    v15 = icmp ne v14, v2  ; v2 = 0
+    v16 = bor v13, v15
+    brif v16, block1, block2
+
+block2:
+    v17 = iconst.i64 <addr>
+    v24 = iconst.i64 32
+    v9 = sshr.i64 v8, v24  ; v24 = 32
+    v10 = ireduce.i32 v9
+    v18 = call_indirect sig0, v17(v7, v10)  ; v17 = <addr>
+    v19 = uextend.i64 v18
+    v20 = ishl v19, v24  ; v24 = 32
+    store notrap aligned v20, v1
+    v21 = iconst.i8 1
+    return v21  ; v21 = 1
+
+block1 cold:
+    v29 = iconst.i8 0
+    return v29  ; v29 = 0
+}
+
+; Turbocall IR
+function %hash_wrapper(i64, i64, i32, i64) -> i32 apple_aarch64 {
+    sig0 = (i64, i32) -> i32 apple_aarch64
+    sig1 = (i64) -> i64 apple_aarch64
+    sig2 = (i64) apple_aarch64
+
+block0(v0: i64, v1: i64, v2: i32, v3: i64):
+    v4 = iconst.i64 <addr>
+    v5 = call_indirect sig1, v4(v1)  ; v4 = <addr>
+    v6 = iconst.i64 <addr>
+    v7 = icmp eq v5, v6  ; v6 = <addr>
+    brif v7, block1, block2
+
+block2:
+    v8 = iconst.i64 <addr>
+    v9 = call_indirect sig0, v8(v5, v2)  ; v8 = <addr>
+    return v9
+
+block1 cold:
+    v10 = iconst.i64 <addr>
+    call_indirect sig2, v10(v3)  ; v10 = <addr>
+    v11 = iconst.i32 0
+    return v11  ; v11 = 0
+}
+
+; Slow turbocall IR
+function %nop_bool_slow(i64, i64) -> i8 apple_aarch64 {
+    ss0 = explicit_slot 1
+    sig0 = (i8 uext) apple_aarch64
+    sig1 = (i64, i32, i64) -> i32 apple_aarch64
+    sig2 = (i64, i32, i64) -> f64 apple_aarch64
+    sig3 = (i64, i32, i64) -> i64 apple_aarch64
+    sig4 = (i64, f64) apple_aarch64
+
+block0(v0: i64, v1: i64):
+    v2 = iconst.i8 0
+    v13 = stack_addr.i64 ss0
+    store notrap v2, v13  ; v2 = 0
+    v5 = iconst.i64 <addr>
+    v4 = iconst.i32 0
+    v6 = call_indirect sig1, v5(v0, v4, v13)  ; v5 = <addr>, v4 = 0
+    v8 = load.i8 notrap v13
+    v9 = icmp ne v8, v2  ; v2 = 0
+    brif v9, block1, block2
+
+block2:
+    v10 = iconst.i64 <addr>
+    v7 = ireduce.i8 v6
+    call_indirect sig0, v10(v7)  ; v10 = <addr>
+    v11 = iconst.i8 1
+    return v11  ; v11 = 1
+
+block1 cold:
+    v16 = iconst.i8 0
+    return v16  ; v16 = 0
+}
+
+; Turbocall IR
+function %nop_bool_wrapper(i64, i32, i64) apple_aarch64 {
+    sig0 = (i8 uext) apple_aarch64
+    sig1 = (i64) -> i64 apple_aarch64
+    sig2 = (i64) apple_aarch64
+
+block0(v0: i64, v1: i32, v2: i64):
+    v4 = iconst.i64 <addr>
+    v3 = ireduce.i8 v1
+    call_indirect sig0, v4(v3)  ; v4 = <addr>
+    return
+}
+
+; Slow turbocall IR
+function %nop_buffer_slow(i64, i64) -> i8 apple_aarch64 {
+    ss0 = explicit_slot 1
+    sig0 = (i64) apple_aarch64
+    sig1 = (i64, i32, i64) -> i32 apple_aarch64
+    sig2 = (i64, i32, i64) -> f64 apple_aarch64
+    sig3 = (i64, i32, i64) -> i64 apple_aarch64
+    sig4 = (i64, f64) apple_aarch64
+
+block0(v0: i64, v1: i64):
+    v2 = iconst.i8 0
+    v12 = stack_addr.i64 ss0
+    store notrap v2, v12  ; v2 = 0
+    v5 = iconst.i64 <addr>
+    v4 = iconst.i32 0
+    v6 = call_indirect sig3, v5(v0, v4, v12)  ; v5 = <addr>, v4 = 0
+    v7 = load.i8 notrap v12
+    v8 = icmp ne v7, v2  ; v2 = 0
+    brif v8, block1, block2
+
+block2:
+    v9 = iconst.i64 <addr>
+    call_indirect sig0, v9(v6)  ; v9 = <addr>
+    v10 = iconst.i8 1
+    return v10  ; v10 = 1
+
+block1 cold:
+    v15 = iconst.i8 0
+    return v15  ; v15 = 0
+}
+
+; Turbocall IR
+function %nop_buffer_wrapper(i64, i64, i64) apple_aarch64 {
+    sig0 = (i64) apple_aarch64
+    sig1 = (i64) -> i64 apple_aarch64
+    sig2 = (i64) apple_aarch64
+
+block0(v0: i64, v1: i64, v2: i64):
+    v3 = iconst.i64 <addr>
+    v4 = call_indirect sig1, v3(v1)  ; v3 = <addr>
+    v5 = iconst.i64 <addr>
+    v6 = icmp eq v4, v5  ; v5 = <addr>
+    brif v6, block1, block2
+
+block2:
+    v7 = iconst.i64 <addr>
+    call_indirect sig0, v7(v4)  ; v7 = <addr>
+    return
+
+block1 cold:
+    v8 = iconst.i64 <addr>
+    call_indirect sig2, v8(v2)  ; v8 = <addr>
+    return
+}
+
+; Slow turbocall IR
+function %nop_f64_slow(i64, i64) -> i8 apple_aarch64 {
+    ss0 = explicit_slot 1
+    sig0 = (f64) apple_aarch64
+    sig1 = (i64, i32, i64) -> i32 apple_aarch64
+    sig2 = (i64, i32, i64) -> f64 apple_aarch64
+    sig3 = (i64, i32, i64) -> i64 apple_aarch64
+    sig4 = (i64, f64) apple_aarch64
+
+block0(v0: i64, v1: i64):
+    v2 = iconst.i8 0
+    v12 = stack_addr.i64 ss0
+    store notrap v2, v12  ; v2 = 0
+    v5 = iconst.i64 <addr>
+    v4 = iconst.i32 0
+    v6 = call_indirect sig2, v5(v0, v4, v12)  ; v5 = <addr>, v4 = 0
+    v7 = load.i8 notrap v12
+    v8 = icmp ne v7, v2  ; v2 = 0
+    brif v8, block1, block2
+
+block2:
+    v9 = iconst.i64 <addr>
+    call_indirect sig0, v9(v6)  ; v9 = <addr>
+    v10 = iconst.i8 1
+    return v10  ; v10 = 1
+
+block1 cold:
+    v15 = iconst.i8 0
+    return v15  ; v15 = 0
+}
+
+; Turbocall IR
+function %nop_f64_wrapper(i64, f64, i64) apple_aarch64 {
+    sig0 = (f64) apple_aarch64
+    sig1 = (i64) -> i64 apple_aarch64
+    sig2 = (i64) apple_aarch64
+
+block0(v0: i64, v1: f64, v2: i64):
+    v3 = iconst.i64 <addr>
+    call_indirect sig0, v3(v1)  ; v3 = <addr>
+    return
+}
+
+; Slow turbocall IR
+function %nop_i32_slow(i64, i64) -> i8 apple_aarch64 {
+    sig0 = (i32) apple_aarch64
+    sig1 = (i64, i32, i64) -> i32 apple_aarch64
+    sig2 = (i64, i32, i64) -> f64 apple_aarch64
+    sig3 = (i64, i32, i64) -> i64 apple_aarch64
+    sig4 = (i64, f64) apple_aarch64
+
+block0(v0: i64, v1: i64):
+    v2 = load.i64 notrap aligned v0+16
+    v3 = load.i64 notrap aligned v2+80
+    v6 = iconst.i64 1
+    v7 = band v3, v6  ; v6 = 1
+    v13 = iconst.i64 0
+    v8 = icmp ne v7, v13  ; v13 = 0
+    brif v8, block1, block2
+
+block2:
+    v9 = iconst.i64 <addr>
+    v12 = iconst.i64 32
+    v4 = sshr.i64 v3, v12  ; v12 = 32
+    v5 = ireduce.i32 v4
+    call_indirect sig0, v9(v5)  ; v9 = <addr>
+    v10 = iconst.i8 1
+    return v10  ; v10 = 1
+
+block1 cold:
+    v11 = iconst.i8 0
+    return v11  ; v11 = 0
+}
+
+; Turbocall IR
+function %nop_i32_wrapper(i64, i32, i64) apple_aarch64 {
+    sig0 = (i32) apple_aarch64
+    sig1 = (i64) -> i64 apple_aarch64
+    sig2 = (i64) apple_aarch64
+
+block0(v0: i64, v1: i32, v2: i64):
+    v3 = iconst.i64 <addr>
+    call_indirect sig0, v3(v1)  ; v3 = <addr>
+    return
+}
+
+; Slow turbocall IR
+function %nop_slow(i64, i64) -> i8 apple_aarch64 {
+    sig0 = () apple_aarch64
+    sig1 = (i64, i32, i64) -> i32 apple_aarch64
+    sig2 = (i64, i32, i64) -> f64 apple_aarch64
+    sig3 = (i64, i32, i64) -> i64 apple_aarch64
+    sig4 = (i64, f64) apple_aarch64
+
+block0(v0: i64, v1: i64):
+    v2 = iconst.i64 <addr>
+    call_indirect sig0, v2()  ; v2 = <addr>
+    v3 = iconst.i8 1
+    return v3  ; v3 = 1
+}
+
+; Slow turbocall IR
+function %nop_u8_slow(i64, i64) -> i8 apple_aarch64 {
+    sig0 = (i8 uext) apple_aarch64
+    sig1 = (i64, i32, i64) -> i32 apple_aarch64
+    sig2 = (i64, i32, i64) -> f64 apple_aarch64
+    sig3 = (i64, i32, i64) -> i64 apple_aarch64
+    sig4 = (i64, f64) apple_aarch64
+
+block0(v0: i64, v1: i64):
+    v2 = load.i64 notrap aligned v0+16
+    v3 = load.i64 notrap aligned v2+80
+    v7 = iconst.i64 1
+    v8 = band v3, v7  ; v7 = 1
+    v14 = iconst.i64 0
+    v9 = icmp ne v8, v14  ; v14 = 0
+    brif v9, block1, block2
+
+block2:
+    v10 = iconst.i64 <addr>
+    v13 = iconst.i64 32
+    v4 = sshr.i64 v3, v13  ; v13 = 32
+    v5 = ireduce.i32 v4
+    v6 = ireduce.i8 v5
+    call_indirect sig0, v10(v6)  ; v10 = <addr>
+    v11 = iconst.i8 1
+    return v11  ; v11 = 1
+
+block1 cold:
+    v12 = iconst.i8 0
+    return v12  ; v12 = 0
+}
+
+; Turbocall IR
+function %nop_u8_wrapper(i64, i32, i64) apple_aarch64 {
+    sig0 = (i8 uext) apple_aarch64
+    sig1 = (i64) -> i64 apple_aarch64
+    sig2 = (i64) apple_aarch64
+
+block0(v0: i64, v1: i32, v2: i64):
+    v4 = iconst.i64 <addr>
+    v3 = ireduce.i8 v1
+    call_indirect sig0, v4(v3)  ; v4 = <addr>
+    return
+}
+
+; Turbocall IR
+function %nop_wrapper(i64, i64) apple_aarch64 {
+    sig0 = () apple_aarch64
+    sig1 = (i64) -> i64 apple_aarch64
+    sig2 = (i64) apple_aarch64
+
+block0(v0: i64, v1: i64):
+    v2 = iconst.i64 <addr>
+    call_indirect sig0, v2()  ; v2 = <addr>
+    return
+}
+
+; Slow turbocall IR
+function %return_bool_slow(i64, i64) -> i8 apple_aarch64 {
+    sig0 = () -> i8 uext apple_aarch64
+    sig1 = (i64, i32, i64) -> i32 apple_aarch64
+    sig2 = (i64, i32, i64) -> f64 apple_aarch64
+    sig3 = (i64, i32, i64) -> i64 apple_aarch64
+    sig4 = (i64, f64) apple_aarch64
+
+block0(v0: i64, v1: i64):
+    v2 = iconst.i64 <addr>
+    v3 = call_indirect sig0, v2()  ; v2 = <addr>
+    v4 = uextend.i64 v3
+    v7 = iconst.i64 32
+    v5 = ishl v4, v7  ; v7 = 32
+    store notrap aligned v5, v1
+    v6 = iconst.i8 1
+    return v6  ; v6 = 1
+}
+
+; Turbocall IR
+function %return_bool_wrapper(i64, i64) -> i32 apple_aarch64 {
+    sig0 = () -> i8 uext apple_aarch64
+    sig1 = (i64) -> i64 apple_aarch64
+    sig2 = (i64) apple_aarch64
+
+block0(v0: i64, v1: i64):
+    v2 = iconst.i64 <addr>
+    v3 = call_indirect sig0, v2()  ; v2 = <addr>
+    v4 = uextend.i32 v3
+    return v4
+}
+
+; Slow turbocall IR
+function %return_f64_slow(i64, i64) -> i8 apple_aarch64 {
+    sig0 = () -> f64 apple_aarch64
+    sig1 = (i64, i32, i64) -> i32 apple_aarch64
+    sig2 = (i64, i32, i64) -> f64 apple_aarch64
+    sig3 = (i64, i32, i64) -> i64 apple_aarch64
+    sig4 = (i64, f64) apple_aarch64
+
+block0(v0: i64, v1: i64):
+    v2 = iconst.i64 <addr>
+    v3 = call_indirect sig0, v2()  ; v2 = <addr>
+    v4 = iconst.i64 <addr>
+    call_indirect sig4, v4(v1, v3)  ; v4 = <addr>
+    v5 = iconst.i8 1
+    return v5  ; v5 = 1
+}
+
+; Turbocall IR
+function %return_f64_wrapper(i64, i64) -> f64 apple_aarch64 {
+    sig0 = () -> f64 apple_aarch64
+    sig1 = (i64) -> i64 apple_aarch64
+    sig2 = (i64) apple_aarch64
+
+block0(v0: i64, v1: i64):
+    v2 = iconst.i64 <addr>
+    v3 = call_indirect sig0, v2()  ; v2 = <addr>
+    return v3
+}
+
+; Slow turbocall IR
+function %return_i32_slow(i64, i64) -> i8 apple_aarch64 {
+    sig0 = () -> i32 apple_aarch64
+    sig1 = (i64, i32, i64) -> i32 apple_aarch64
+    sig2 = (i64, i32, i64) -> f64 apple_aarch64
+    sig3 = (i64, i32, i64) -> i64 apple_aarch64
+    sig4 = (i64, f64) apple_aarch64
+
+block0(v0: i64, v1: i64):
+    v2 = iconst.i64 <addr>
+    v3 = call_indirect sig0, v2()  ; v2 = <addr>
+    v4 = sextend.i64 v3
+    v7 = iconst.i64 32
+    v5 = ishl v4, v7  ; v7 = 32
+    store notrap aligned v5, v1
+    v6 = iconst.i8 1
+    return v6  ; v6 = 1
+}
+
+; Turbocall IR
+function %return_i32_wrapper(i64, i64) -> i32 apple_aarch64 {
+    sig0 = () -> i32 apple_aarch64
+    sig1 = (i64) -> i64 apple_aarch64
+    sig2 = (i64) apple_aarch64
+
+block0(v0: i64, v1: i64):
+    v2 = iconst.i64 <addr>
+    v3 = call_indirect sig0, v2()  ; v2 = <addr>
+    return v3
+}
+
+; Slow turbocall IR
+function %return_u32_slow(i64, i64) -> i8 apple_aarch64 {
+    sig0 = () -> i32 apple_aarch64
+    sig1 = (i64, i32, i64) -> i32 apple_aarch64
+    sig2 = (i64, i32, i64) -> f64 apple_aarch64
+    sig3 = (i64, i32, i64) -> i64 apple_aarch64
+    sig4 = (i64, f64) apple_aarch64
+
+block0(v0: i64, v1: i64):
+    v2 = iconst.i64 <addr>
+    v3 = call_indirect sig0, v2()  ; v2 = <addr>
+    v4 = uextend.i64 v3
+    v7 = iconst.i64 32
+    v5 = ishl v4, v7  ; v7 = 32
+    store notrap aligned v5, v1
+    v6 = iconst.i8 1
+    return v6  ; v6 = 1
+}
+
+; Turbocall IR
+function %return_u32_wrapper(i64, i64) -> i32 apple_aarch64 {
+    sig0 = () -> i32 apple_aarch64
+    sig1 = (i64) -> i64 apple_aarch64
+    sig2 = (i64) apple_aarch64
+
+block0(v0: i64, v1: i64):
+    v2 = iconst.i64 <addr>
+    v3 = call_indirect sig0, v2()  ; v2 = <addr>
+    return v3
+}
