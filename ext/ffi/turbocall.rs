@@ -254,17 +254,70 @@ pub(crate) fn compile_trampoline(
           f.def_var(target_v, v);
         }
         NativeType::Buffer => {
-          let callee =
-            f.ins().iconst(ISIZE, turbocall_ab_contents as usize as i64);
+          // V8 object layout (no pointer compression, 64-bit).
+          // See v8-internal.h Internals class and torque-generated
+          // js-array-buffer-tq.inc for authoritative values.
+          const {
+            assert!(std::mem::size_of::<usize>() == 8);
+            assert!(deno_core::v8::TYPED_ARRAY_MAX_SIZE_IN_HEAP == 0);
+          }
+          const HEAP_TAG: i32 = 1;
+          const MAP_INSTANCE_TYPE_OFF: i32 = 12;
+          const AB_BACKING_STORE_OFF: i32 = 56;
+          const TA_EXTERNAL_PTR_OFF: i32 = 72;
+          const FIRST_ABV_TYPE: i64 = 2059;
+          const JS_AB_TYPE: i64 = 2062;
+
+          // Deref Local handle -> tagged obj -> map -> instance_type
+          let obj = f.ins().load(ISIZE, MemFlags::trusted(), arg, 0);
+          let map = f.ins().load(ISIZE, MemFlags::trusted(), obj, -HEAP_TAG);
+          let ty = f.ins().load(
+            types::I16, MemFlags::trusted(), map,
+            MAP_INSTANCE_TYPE_OFF - HEAP_TAG,
+          );
+
+          // instance_type in [2059..2062] covers ABV + AB
+          let rel = f.ins().iadd_imm(ty, -FIRST_ABV_TYPE);
+          let in_range = f.ins().icmp_imm(
+            IntCC::UnsignedLessThanOrEqual, rel,
+            JS_AB_TYPE - FIRST_ABV_TYPE, // 3
+          );
+
+          let inline_block = f.create_block();
+          let merge = f.create_block();
+          f.append_block_param(merge, ISIZE);
+          let fallback = f.create_block();
+          f.set_cold_block(fallback);
+
+          f.ins().brif(in_range, inline_block, &[], fallback, &[]);
+
+          // Branchless offset select: AB (rel==3) -> 56, ABV -> 72
+          f.switch_to_block(inline_block);
+          f.seal_block(inline_block);
+          let is_ab = f.ins().icmp_imm(
+            IntCC::Equal, rel, JS_AB_TYPE - FIRST_ABV_TYPE,
+          );
+          let ab_off = f.ins().iconst(ISIZE, (AB_BACKING_STORE_OFF - HEAP_TAG) as i64);
+          let abv_off = f.ins().iconst(ISIZE, (TA_EXTERNAL_PTR_OFF - HEAP_TAG) as i64);
+          let off = f.ins().select(is_ab, ab_off, abv_off);
+          let addr = f.ins().iadd(obj, off);
+          let ptr = f.ins().load(ISIZE, MemFlags::trusted(), addr, 0);
+          f.ins().jump(merge, &[ptr]);
+
+          f.switch_to_block(fallback);
+          f.seal_block(fallback);
+          let callee = f.ins().iconst(ISIZE, turbocall_ab_contents as usize as i64);
           let call = f.ins().call_indirect(ab_sig, callee, &[arg]);
           let result = f.inst_results(call)[0];
-          f.def_var(target_v, result);
-
           let sentinel = f.ins().iconst(ISIZE, isize::MAX as i64);
-          let condition = f.ins().icmp(IntCC::Equal, result, sentinel);
-          f.ins().brif(condition, error, &[], next, &[]);
+          let is_err = f.ins().icmp(IntCC::Equal, result, sentinel);
+          f.ins().brif(is_err, error, &[], merge, &[result]);
 
-          // switch to new block
+          f.switch_to_block(merge);
+          f.seal_block(merge);
+          f.def_var(target_v, f.block_params(merge)[0]);
+
+          f.ins().jump(next, &[]);
           f.switch_to_block(next);
           f.seal_block(next);
           next = f.create_block();
