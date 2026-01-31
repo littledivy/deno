@@ -24,6 +24,7 @@ use crate::ir::out_buffer_as_ptr;
 use crate::symbol::NativeType;
 use crate::symbol::Symbol;
 use crate::turbocall;
+use crate::turbocall::Trampoline;
 use crate::turbocall::Turbocall;
 
 deno_error::js_error_wrapper!(dlopen2::Error, JsDlopen2Error, |err| {
@@ -254,6 +255,9 @@ pub struct FunctionData {
   // Held in a box to keep inner data alive while function is alive.
   #[allow(unused)]
   turbocall: Option<Turbocall>,
+  // Slow-path JIT trampoline that bypasses libffi.
+  #[allow(unused)]
+  slow_trampoline: Option<Trampoline>,
 }
 
 // SAFETY: we're sure `FunctionData` can be GCed
@@ -293,7 +297,23 @@ fn make_sync_fn<'s>(
     )
   });
 
-  let data = FunctionData { symbol, turbocall };
+  let slow_trampoline = if turbocall::is_slow_compatible(&symbol) {
+    match turbocall::compile_slow_trampoline(&symbol) {
+      Ok(trampoline) => Some(trampoline),
+      Err(e) => {
+        log::warn!("Failed to compile slow FFI turbocall: {e}");
+        None
+      }
+    }
+  } else {
+    None
+  };
+
+  let data = FunctionData {
+    symbol,
+    turbocall,
+    slow_trampoline,
+  };
   let data = deno_core::cppgc::make_cppgc_object(scope, data);
 
   let builder = v8::FunctionTemplate::builder(sync_fn_impl).data(data.into());
@@ -316,6 +336,25 @@ fn sync_fn_impl<'s>(
     args.data(),
   )
   .unwrap();
+
+  // Try the slow-path JIT trampoline first. It extracts V8 values and
+  // calls the FFI function directly, bypassing libffi and the generic
+  // type-dispatch loop. On success it sets rv and we return immediately.
+  // On failure (type extraction error) it returns 0 and we fall through
+  // to the generic path which produces the proper JS exception.
+  if let Some(slow_trampoline) = &data.slow_trampoline {
+    // SAFETY: The trampoline pointer is a compiled function with the
+    // SlowTrampolineFn signature. args and rv live on our stack frame
+    // and remain valid for the duration of the call.
+    let trampoline_fn: turbocall::SlowTrampolineFn =
+      unsafe { std::mem::transmute(slow_trampoline.ptr()) };
+    let args_ptr = std::ptr::addr_of!(args) as *const c_void;
+    let rv_ptr = std::ptr::addr_of_mut!(rv) as *mut c_void;
+    if trampoline_fn(args_ptr, rv_ptr) != 0 {
+      return;
+    }
+  }
+
   let out_buffer = match data.symbol.result_type {
     NativeType::Struct(_) => {
       let argc = args.length();
