@@ -465,24 +465,6 @@ extern "C" fn slow_get_bool(
   }
 }
 
-extern "C" fn slow_get_i32(
-  args: *const c_void,
-  index: i32,
-  error: *mut bool,
-) -> i32 {
-  // SAFETY: args points to a valid FunctionCallbackArguments on the caller's stack.
-  let args =
-    unsafe { &*(args as *const v8::FunctionCallbackArguments<'static>) };
-  let value = args.get(index);
-  match v8::Local::<v8::Number>::try_from(value) {
-    Ok(v) => v.value() as i32,
-    Err(_) => {
-      unsafe { *error = true };
-      0
-    }
-  }
-}
-
 extern "C" fn slow_get_f64(
   args: *const c_void,
   index: i32,
@@ -519,17 +501,6 @@ extern "C" fn slow_get_buffer(
   }
 }
 
-extern "C" fn slow_ret_i32(rv: *mut c_void, value: i32) {
-  // SAFETY: rv points to a valid ReturnValue on the caller's stack.
-  let rv = unsafe { &mut *(rv as *mut v8::ReturnValue) };
-  rv.set_int32(value);
-}
-
-extern "C" fn slow_ret_u32(rv: *mut c_void, value: u32) {
-  // SAFETY: rv points to a valid ReturnValue on the caller's stack.
-  let rv = unsafe { &mut *(rv as *mut v8::ReturnValue) };
-  rv.set_uint32(value);
-}
 
 extern "C" fn slow_ret_f64(rv: *mut c_void, value: f64) {
   // SAFETY: rv points to a valid ReturnValue on the caller's stack.
@@ -657,13 +628,6 @@ pub(crate) fn compile_slow_trampoline(
     sig.returns.push(AbiParam::new(ISIZE));
     f.import_signature(sig)
   };
-  // ret_i32 / ret_u32: (rv_ptr, value)
-  let sig_ret_i32 = {
-    let mut sig = cranelift::codegen::ir::Signature::new(cc);
-    sig.params.push(AbiParam::new(ISIZE));
-    sig.params.push(AbiParam::new(types::I32));
-    f.import_signature(sig)
-  };
   // ret_f64: (rv_ptr, value)
   let sig_ret_f64 = {
     let mut sig = cranelift::codegen::ir::Signature::new(cc);
@@ -673,6 +637,43 @@ pub(crate) fn compile_slow_trampoline(
   };
 
   let has_params = !sym.parameter_types.is_empty();
+
+  // Determine if we can use inline SMI extraction for integer params.
+  // SMI layout on 64-bit V8: bit 0 = tag (0 = SMI), value = upper 32 bits.
+  // V8 FunctionCallbackInfo: values_ at offset 0, kFirstJSArgumentIndex = 10,
+  // each slot 8 bytes. arg[i] = *(*(args_ptr) + (10 + i) * 8)
+  //
+  // Note: FunctionCallbackArguments wraps the raw values pointer. Its first
+  // field (implicit_args_) is at offset 0 and length_ at offset 8.
+  // The values pointer is stored at offset 16.
+  fn is_smi_compatible(nty: &NativeType) -> bool {
+    matches!(
+      nty,
+      NativeType::U8
+        | NativeType::I8
+        | NativeType::U16
+        | NativeType::I16
+        | NativeType::U32
+        | NativeType::I32
+    )
+  }
+
+  fn is_smi_return(nty: &NativeType) -> bool {
+    matches!(
+      nty,
+      NativeType::Bool
+        | NativeType::U8
+        | NativeType::I8
+        | NativeType::U16
+        | NativeType::I16
+        | NativeType::U32
+        | NativeType::I32
+    )
+  }
+
+  // V8 FCI layout constants
+  const FCI_VALUES_OFFSET: i32 = 16; // offset of values_ ptr in FunctionCallbackArguments
+  const FCI_FIRST_JS_ARG: i64 = 10; // kFirstJSArgumentIndex
 
   {
     let entry = f.create_block();
@@ -700,8 +701,10 @@ pub(crate) fn compile_slow_trampoline(
       None
     };
 
-    // Error flag on stack
-    let error_slot = if has_params {
+    // Error flag on stack (only needed if we have non-SMI params that
+    // use helper calls which can fail).
+    let has_non_smi = sym.parameter_types.iter().any(|t| !is_smi_compatible(t));
+    let error_slot = if has_params && has_non_smi {
       let slot = f.create_sized_stack_slot(StackSlotData::new(
         StackSlotKind::ExplicitSlot,
         1,
@@ -715,131 +718,163 @@ pub(crate) fn compile_slow_trampoline(
       None
     };
 
-    // Extract each parameter via external helper call.
-    for (index, nty) in sym.parameter_types.iter().enumerate() {
-      let idx = f.ins().iconst(types::I32, index as i64);
-      let err = error_slot.unwrap().1;
+    // For SMI-compatible integer params, load the values_ pointer from
+    // FunctionCallbackArguments once and accumulate tag bits.
+    let has_smi = sym.parameter_types.iter().any(|t| is_smi_compatible(t));
+    let fci_ptr = if has_smi {
+      // Load values_ pointer: *(args_ptr + FCI_VALUES_OFFSET)
+      Some(f.ins().load(ISIZE, MemFlags::trusted(), args_ptr, FCI_VALUES_OFFSET))
+    } else {
+      None
+    };
+    let mut smi_tag_acc: Option<cranelift::prelude::Value> = None;
 
-      match nty {
-        NativeType::Bool => {
-          let callee =
-            f.ins().iconst(ISIZE, slow_get_bool as usize as i64);
-          let call = f.ins().call_indirect(
-            sig_get_i32, callee, &[args_ptr, idx, err],
-          );
-          let v = f.inst_results(call)[0];
-          let v = f.ins().ireduce(types::I8, v);
-          target_args.push(v);
+    // Extract each parameter.
+    for (index, nty) in sym.parameter_types.iter().enumerate() {
+      if is_smi_compatible(nty) {
+        // Inline SMI extraction: load tagged value, accumulate tag bit,
+        // arithmetic shift right by 32 to get the i32 value.
+        let slot_offset = ((FCI_FIRST_JS_ARG + index as i64) * 8) as i32;
+        let tagged = f.ins().load(
+          ISIZE, MemFlags::trusted(), fci_ptr.unwrap(), slot_offset,
+        );
+
+        // Accumulate tag bits: tag = tagged & 1, acc |= tag
+        match smi_tag_acc {
+          None => {
+            smi_tag_acc = Some(tagged);
+          }
+          Some(acc) => {
+            smi_tag_acc = Some(f.ins().bor(acc, tagged));
+          }
         }
-        NativeType::U8 | NativeType::I8 => {
-          let callee =
-            f.ins().iconst(ISIZE, slow_get_i32 as usize as i64);
-          let call = f.ins().call_indirect(
-            sig_get_i32, callee, &[args_ptr, idx, err],
-          );
-          let v = f.inst_results(call)[0];
-          let v = f.ins().ireduce(types::I8, v);
-          target_args.push(v);
+
+        // Extract value: arithmetic shift right 32
+        let shifted = f.ins().sshr_imm(tagged, 32);
+        let i32_val = f.ins().ireduce(types::I32, shifted);
+
+        match nty {
+          NativeType::U8 | NativeType::I8 => {
+            let v = f.ins().ireduce(types::I8, i32_val);
+            target_args.push(v);
+          }
+          NativeType::U16 | NativeType::I16 => {
+            let v = f.ins().ireduce(types::I16, i32_val);
+            target_args.push(v);
+          }
+          _ => {
+            target_args.push(i32_val);
+          }
         }
-        NativeType::U16 | NativeType::I16 => {
-          let callee =
-            f.ins().iconst(ISIZE, slow_get_i32 as usize as i64);
-          let call = f.ins().call_indirect(
-            sig_get_i32, callee, &[args_ptr, idx, err],
-          );
-          let v = f.inst_results(call)[0];
-          let v = f.ins().ireduce(types::I16, v);
-          target_args.push(v);
+      } else {
+        // Non-SMI: use external helper call.
+        let idx = f.ins().iconst(types::I32, index as i64);
+        let err = error_slot.unwrap().1;
+
+        match nty {
+          NativeType::Bool => {
+            let callee =
+              f.ins().iconst(ISIZE, slow_get_bool as usize as i64);
+            let call = f.ins().call_indirect(
+              sig_get_i32, callee, &[args_ptr, idx, err],
+            );
+            let v = f.inst_results(call)[0];
+            let v = f.ins().ireduce(types::I8, v);
+            target_args.push(v);
+          }
+          NativeType::F32 => {
+            let callee =
+              f.ins().iconst(ISIZE, slow_get_f64 as usize as i64);
+            let call = f.ins().call_indirect(
+              sig_get_f64, callee, &[args_ptr, idx, err],
+            );
+            let v = f.inst_results(call)[0];
+            let v = f.ins().fdemote(types::F32, v);
+            target_args.push(v);
+          }
+          NativeType::F64 => {
+            let callee =
+              f.ins().iconst(ISIZE, slow_get_f64 as usize as i64);
+            let call = f.ins().call_indirect(
+              sig_get_f64, callee, &[args_ptr, idx, err],
+            );
+            let v = f.inst_results(call)[0];
+            target_args.push(v);
+          }
+          NativeType::Buffer => {
+            let callee =
+              f.ins().iconst(ISIZE, slow_get_buffer as usize as i64);
+            let call = f.ins().call_indirect(
+              sig_get_ptr, callee, &[args_ptr, idx, err],
+            );
+            let v = f.inst_results(call)[0];
+            target_args.push(v);
+          }
+          _ => unreachable!("is_slow_compatible should have filtered this"),
         }
-        NativeType::U32 | NativeType::I32 => {
-          let callee =
-            f.ins().iconst(ISIZE, slow_get_i32 as usize as i64);
-          let call = f.ins().call_indirect(
-            sig_get_i32, callee, &[args_ptr, idx, err],
-          );
-          let v = f.inst_results(call)[0];
-          target_args.push(v);
-        }
-        NativeType::F32 => {
-          let callee =
-            f.ins().iconst(ISIZE, slow_get_f64 as usize as i64);
-          let call = f.ins().call_indirect(
-            sig_get_f64, callee, &[args_ptr, idx, err],
-          );
-          let v = f.inst_results(call)[0];
-          let v = f.ins().fdemote(types::F32, v);
-          target_args.push(v);
-        }
-        NativeType::F64 => {
-          let callee =
-            f.ins().iconst(ISIZE, slow_get_f64 as usize as i64);
-          let call = f.ins().call_indirect(
-            sig_get_f64, callee, &[args_ptr, idx, err],
-          );
-          let v = f.inst_results(call)[0];
-          target_args.push(v);
-        }
-        NativeType::Buffer => {
-          let callee =
-            f.ins().iconst(ISIZE, slow_get_buffer as usize as i64);
-          let call = f.ins().call_indirect(
-            sig_get_ptr, callee, &[args_ptr, idx, err],
-          );
-          let v = f.inst_results(call)[0];
-          target_args.push(v);
-        }
-        _ => unreachable!("is_slow_compatible should have filtered this"),
       }
     }
 
-    // Check error flag.
+    // Check error conditions.
     if has_params {
-      let (slot, _) = error_slot.unwrap();
-      let e = f.ins().stack_load(types::I8, slot, 0);
-      let is_err = f.ins().icmp_imm(IntCC::NotEqual, e, 0);
-      f.ins().brif(
-        is_err,
-        error_block.unwrap(),
-        &[],
-        call_block.unwrap(),
-        &[],
-      );
-      f.switch_to_block(call_block.unwrap());
-      f.seal_block(call_block.unwrap());
+      // Batch SMI tag check: if any accumulated tag bit 0 is set, not all
+      // values were SMIs — fall back.
+      // Also check the error flag from non-SMI helper calls.
+      let mut fail_cond = None;
+
+      if let Some(acc) = smi_tag_acc {
+        let one = f.ins().iconst(ISIZE, 1);
+        let tag = f.ins().band(acc, one);
+        let not_smi = f.ins().icmp_imm(IntCC::NotEqual, tag, 0);
+        fail_cond = Some(not_smi);
+      }
+
+      if let Some((slot, _)) = error_slot {
+        let e = f.ins().stack_load(types::I8, slot, 0);
+        let helper_err = f.ins().icmp_imm(IntCC::NotEqual, e, 0);
+        fail_cond = Some(match fail_cond {
+          Some(prev) => f.ins().bor(prev, helper_err),
+          None => helper_err,
+        });
+      }
+
+      if let Some(cond) = fail_cond {
+        f.ins().brif(
+          cond,
+          error_block.unwrap(),
+          &[],
+          call_block.unwrap(),
+          &[],
+        );
+        f.switch_to_block(call_block.unwrap());
+        f.seal_block(call_block.unwrap());
+      }
     }
 
     // Call the FFI target.
     let callee = f.ins().iconst(ISIZE, sym.ptr.as_ptr() as i64);
     let call = f.ins().call_indirect(target_sig, callee, &target_args);
 
-    // Set the return value via helper.
+    // Set the return value.
     match &sym.result_type {
       NativeType::Void => {}
-      NativeType::Bool | NativeType::U8 | NativeType::U16 => {
+      _ if is_smi_return(&sym.result_type) => {
+        // Inline SMI return: encode as tagged SMI and store directly
+        // into ReturnValue. SMI encoding: value << 32 (tag bit 0 = 0).
+        // ReturnValue stores the tagged value at offset 0.
         let result = f.inst_results(call)[0];
-        let v = f.ins().uextend(types::I32, result);
-        let callee =
-          f.ins().iconst(ISIZE, slow_ret_u32 as usize as i64);
-        f.ins().call_indirect(sig_ret_i32, callee, &[rv_ptr, v]);
-      }
-      NativeType::U32 => {
-        let result = f.inst_results(call)[0];
-        let callee =
-          f.ins().iconst(ISIZE, slow_ret_u32 as usize as i64);
-        f.ins().call_indirect(sig_ret_i32, callee, &[rv_ptr, result]);
-      }
-      NativeType::I8 | NativeType::I16 => {
-        let result = f.inst_results(call)[0];
-        let v = f.ins().sextend(types::I32, result);
-        let callee =
-          f.ins().iconst(ISIZE, slow_ret_i32 as usize as i64);
-        f.ins().call_indirect(sig_ret_i32, callee, &[rv_ptr, v]);
-      }
-      NativeType::I32 => {
-        let result = f.inst_results(call)[0];
-        let callee =
-          f.ins().iconst(ISIZE, slow_ret_i32 as usize as i64);
-        f.ins().call_indirect(sig_ret_i32, callee, &[rv_ptr, result]);
+        let wide = match &sym.result_type {
+          NativeType::Bool | NativeType::U8 | NativeType::U16 => {
+            f.ins().uextend(ISIZE, result)
+          }
+          NativeType::I8 | NativeType::I16 | NativeType::I32 => {
+            f.ins().sextend(ISIZE, result)
+          }
+          NativeType::U32 => f.ins().uextend(ISIZE, result),
+          _ => unreachable!(),
+        };
+        let shifted = f.ins().ishl_imm(wide, 32);
+        f.ins().store(MemFlags::trusted(), shifted, rv_ptr, 0);
       }
       NativeType::F32 => {
         let result = f.inst_results(call)[0];
