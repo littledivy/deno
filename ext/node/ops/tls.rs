@@ -333,7 +333,7 @@ impl UnderlyingStream for JSStreamSocket {
   }
 }
 
-struct JSDuplexResource {
+pub(crate) struct JSDuplexResource {
   readable: Arc<Mutex<tokio::sync::mpsc::Receiver<Bytes>>>,
   writable: tokio::sync::mpsc::Sender<Bytes>,
   read_buffer: Arc<Mutex<VecDeque<Bytes>>>,

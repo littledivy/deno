@@ -22,6 +22,7 @@ use super::stream::Http2Headers;
 use super::stream::Http2Priority;
 use super::stream::Http2Stream;
 use super::types::*;
+use crate::ops::tls::JSDuplexResource;
 
 // Thread-local state buffers
 
@@ -384,6 +385,7 @@ impl Http2Settings {
 pub enum NetworkStream {
   Tcp(Rc<TcpStreamResource>),
   Tls(Rc<TlsStreamResource>),
+  JsDuplex(Rc<JSDuplexResource>),
 }
 
 pub struct Http2SessionDriver {
@@ -396,9 +398,14 @@ impl Http2SessionDriver {
     self: Rc<Self>,
     data: &mut [u8],
   ) -> Result<usize, std::io::Error> {
+    // Flush any pending outgoing data (e.g. client preface, settings)
+    // before waiting for incoming data.
+    self.send_pending_data().await?;
+
     let nread = match &self.stream {
       NetworkStream::Tcp(stream) => stream.clone().read(data).await?,
       NetworkStream::Tls(stream) => stream.clone().read(data).await?,
+      NetworkStream::JsDuplex(stream) => stream.clone().read(data).await?,
     };
 
     let session = unsafe { &*self.session };
@@ -422,6 +429,7 @@ impl Http2SessionDriver {
     match &self.stream {
       NetworkStream::Tcp(stream) => stream.clone().write(data).await,
       NetworkStream::Tls(stream) => stream.clone().write(data).await,
+      NetworkStream::JsDuplex(stream) => stream.clone().write(data).await,
     }
   }
 
@@ -438,6 +446,7 @@ impl Http2SessionDriver {
         match &self.stream {
           NetworkStream::Tcp(stream) => stream.clone().write(data).await?,
           NetworkStream::Tls(stream) => stream.clone().write(data).await?,
+          NetworkStream::JsDuplex(stream) => stream.clone().write(data).await?,
         };
       } else {
         break;
@@ -450,6 +459,7 @@ impl Http2SessionDriver {
         match &self.stream {
           NetworkStream::Tcp(stream) => stream.clone().write(data).await?,
           NetworkStream::Tls(stream) => stream.clone().write(data).await?,
+          NetworkStream::JsDuplex(stream) => stream.clone().write(data).await?,
         };
       }
       session.clear_outgoing();
@@ -1333,9 +1343,13 @@ impl Http2Session {
     let stream =
       if let Ok(tcp) = state.resource_table.take::<TcpStreamResource>(rid) {
         NetworkStream::Tcp(tcp)
+      } else if let Ok(tls) =
+        state.resource_table.take::<TlsStreamResource>(rid)
+      {
+        NetworkStream::Tls(tls)
       } else {
-        NetworkStream::Tls(
-          state.resource_table.take::<TlsStreamResource>(rid).unwrap(),
+        NetworkStream::JsDuplex(
+          state.resource_table.take::<JSDuplexResource>(rid).unwrap(),
         )
       };
 
@@ -1703,4 +1717,24 @@ pub fn op_http2_http_state<'a>(
   scope: &mut v8::PinScope<'a, 'a>,
 ) -> JSHttp2State<'a> {
   JSHttp2State::create(scope)
+}
+
+#[op2(fast)]
+pub fn op_http2_create_js_duplex(
+  state: &mut OpState,
+  #[buffer] output: &mut [u32],
+) {
+  let (js_to_h2_tx, js_to_h2_rx) =
+    tokio::sync::mpsc::channel::<bytes::Bytes>(10);
+  let (h2_to_js_tx, h2_to_js_rx) =
+    tokio::sync::mpsc::channel::<bytes::Bytes>(10);
+
+  let h2_side = JSDuplexResource::new(js_to_h2_rx, h2_to_js_tx);
+  let js_side = JSDuplexResource::new(h2_to_js_rx, js_to_h2_tx);
+
+  let h2_rid = state.resource_table.add(h2_side);
+  let js_rid = state.resource_table.add(js_side);
+
+  output[0] = h2_rid;
+  output[1] = js_rid;
 }

@@ -32,6 +32,7 @@ import {
   Http2Session as InternalHttp2Session,
   op_http2_callbacks,
   op_http2_constants,
+  op_http2_create_js_duplex,
 } from "ext:core/ops";
 import net from "node:net";
 import assert from "node:assert";
@@ -269,8 +270,138 @@ const kMaxALTSVC = (2 ** 14) - 2;
 
 const kQuotedString = /^[\x09\x20-\x5b\x5d-\x7e\x80-\xff]*$/;
 
-// Placeholder classes and functions - these need proper implementation
-class JSStreamSocket {}
+// JSStreamSocket wraps a generic JS stream (e.g. Duplex) into a Socket-like
+// object that the HTTP/2 native implementation can consume. It creates a pair
+// of connected resources: one side is consumed by the native HTTP/2 session,
+// and the other side is used to pump data between JS and native code.
+class JSStreamSocket extends EventEmitter {
+  stream;
+  _handle;
+  _jsRid;
+  readable;
+  writable;
+  connecting;
+  secureConnecting;
+  encrypted;
+
+  constructor(stream) {
+    super();
+    this.stream = stream;
+    this.readable = stream.readable;
+    this.writable = stream.writable;
+    this.connecting = false;
+    this.secureConnecting = false;
+    this.encrypted = false;
+
+    // Create the duplex resource pair
+    const ridBuffer = new Uint32Array(2);
+    op_http2_create_js_duplex(ridBuffer);
+    const h2Rid = ridBuffer[0];
+    const jsRid = ridBuffer[1];
+    this._jsRid = jsRid;
+
+    // Create a handle that setupHandle can use
+    const streamBase = { [internalRidSymbol]: h2Rid };
+    this._handle = {
+      [kStreamBaseField]: streamBase,
+      reading: false,
+      readStop() {},
+      readStart() {},
+      onread: null,
+    };
+
+    // Pump data between the JS stream and the native side
+    this._pumpFromNative();
+    this._pumpToNative();
+
+    // After setupHandle runs (on the next tick), start the driver read loop
+    // which drives the HTTP/2 session I/O by reading from the
+    // Http2SessionDriver resource.
+    process.nextTick(() => {
+      const driverRid =
+        this._handle[kStreamBaseField][internalRidSymbol];
+      this._driveSession(driverRid);
+    });
+  }
+
+  get readableLength() {
+    return 0;
+  }
+
+  read() {
+    return null;
+  }
+
+  setNoDelay() {}
+  disableRenegotiation() {}
+
+  get [kBoundSession]() {
+    return this.stream[kBoundSession];
+  }
+
+  set [kBoundSession](session) {
+    this.stream[kBoundSession] = session;
+  }
+
+  // Drive the HTTP/2 session by continuously reading from the
+  // Http2SessionDriver resource. Each read triggers nghttp2 processing
+  // and flushes pending outgoing frames.
+  _driveSession(driverRid) {
+    (async () => {
+      const buf = new Uint8Array(16384);
+      try {
+        while (true) {
+          const nread = await core.read(driverRid, buf);
+          if (nread === 0 || nread === null) break;
+        }
+      } catch {
+        // Session closed
+      }
+    })();
+  }
+
+  _pumpFromNative() {
+    const jsRid = this._jsRid;
+    const stream = this.stream;
+    (async () => {
+      const buf = new Uint8Array(16384);
+      try {
+        while (true) {
+          const nread = await core.read(jsRid, buf);
+          if (nread === 0 || nread === null) break;
+          stream.write(buf.subarray(0, nread));
+        }
+      } catch {
+        // Stream or resource closed
+      }
+    })();
+  }
+
+  _pumpToNative() {
+    const jsRid = this._jsRid;
+    const stream = this.stream;
+    stream.on("data", (chunk) => {
+      try {
+        core.writeAll(jsRid, chunk);
+      } catch {
+        // Resource closed
+      }
+    });
+    stream.once("end", () => {
+      try {
+        core.close(jsRid);
+      } catch {
+        // Already closed
+      }
+    });
+    stream.once("close", () => {
+      this.emit("close");
+    });
+    stream.once("error", (err) => {
+      this.emit("error", err);
+    });
+  }
+}
 
 // Validates that priority options are correct, specifically:
 // 1. options.weight must be a number
