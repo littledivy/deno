@@ -722,12 +722,47 @@ function isBlob(obj) {
   return ObjectPrototypeIsPrototypeOf(BlobPrototype, obj);
 }
 
+function serializeBlob(blob) {
+  const flatParts = [];
+  collectBlobParts(blob[_parts], flatParts);
+  return { type: blob[_type], size: blob[_size], parts: flatParts };
+}
+
+function collectBlobParts(parts, result) {
+  for (let i = 0; i < parts.length; ++i) {
+    const part = parts[i];
+    if (ObjectPrototypeIsPrototypeOf(BlobPrototype, part)) {
+      collectBlobParts(part[_parts], result);
+    } else {
+      const clonedId = op_blob_slice_part(part._id, {
+        start: 0,
+        len: part.size,
+      });
+      ArrayPrototypePush(result, { id: clonedId, size: part.size });
+    }
+  }
+}
+
+function deserializeBlob(data) {
+  const blob = new Blob([], { type: data.type });
+  const parts = [];
+  for (let i = 0; i < data.parts.length; ++i) {
+    const { id, size } = data.parts[i];
+    ArrayPrototypePush(parts, new BlobReference(id, size));
+  }
+  blob[_parts] = parts;
+  blob[_size] = data.size;
+  return blob;
+}
+
 export {
   Blob,
   blobFromObjectUrl,
   BlobPrototype,
+  deserializeBlob,
   File,
   FilePrototype,
   getParts,
   isBlob,
+  serializeBlob,
 };

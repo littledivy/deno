@@ -13,6 +13,7 @@ import {
 } from "ext:core/ops";
 import {
   deserializeJsMessageData,
+  markAsUncloneable,
   MessageChannel,
   MessagePort,
   MessagePortIdSymbol,
@@ -611,6 +612,13 @@ function webMessagePortToNodeMessagePort(port: MessagePort) {
   port[nodeWorkerThreadCloseCb] = () => {
     port.dispatchEvent(new Event("close"));
   };
+  const webClose = port.close.bind(port);
+  port.close = (callback) => {
+    webClose();
+    if (typeof callback === "function") {
+      callback();
+    }
+  };
   port.unref = () => {
     port[refMessagePort](false);
   };
@@ -679,6 +687,7 @@ class BroadcastChannel extends WebBroadcastChannel {
 
 export {
   BroadcastChannel,
+  markAsUncloneable,
   MessagePort,
   NodeMessageChannel as MessageChannel,
   NodeWorker as Worker,
@@ -688,6 +697,7 @@ export {
 };
 
 const defaultExport = {
+  markAsUncloneable,
   markAsUntransferable,
   moveMessagePortToContext,
   receiveMessageOnPort,

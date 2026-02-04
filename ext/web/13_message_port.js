@@ -19,6 +19,7 @@ const {
   ArrayPrototypePush,
   ObjectPrototypeIsPrototypeOf,
   ObjectDefineProperty,
+  SafeWeakSet,
   Symbol,
   PromiseResolve,
   SafeArrayIterator,
@@ -26,6 +27,8 @@ const {
   SymbolIterator,
   TypeError,
   TypeErrorPrototype,
+  WeakSetPrototypeHas,
+  WeakSetPrototypeAdd,
 } = primordials;
 const {
   InterruptedPrototype,
@@ -42,6 +45,34 @@ import {
 } from "./02_event.js";
 import { isDetachedBuffer } from "./06_streams.js";
 import { DOMException } from "./01_dom_exception.js";
+import {
+  BlobPrototype,
+  deserializeBlob,
+  serializeBlob,
+} from "./09_file.js";
+
+const uncloneableObjects = new SafeWeakSet();
+
+function markAsUncloneable(obj) {
+  if ((typeof obj !== "object" && typeof obj !== "function") || obj === null) {
+    return;
+  }
+  WeakSetPrototypeAdd(uncloneableObjects, obj);
+}
+
+function throwIfUncloneable(value) {
+  if (
+    (typeof value === "object" || typeof value === "function") &&
+    value !== null &&
+    !isArrayBuffer(value) &&
+    WeakSetPrototypeHas(uncloneableObjects, value)
+  ) {
+    throw new DOMException(
+      "This object cannot be cloned.",
+      "DataCloneError",
+    );
+  }
+}
 
 // counter of how many message ports are actively refed
 // either due to the existence of "message" event listeners or
@@ -409,7 +440,11 @@ function deserializeJsMessageData(messageData) {
     };
   }
 
-  const data = core.deserialize(messageData.data, options);
+  let data = core.deserialize(messageData.data, options);
+
+  if (data?.__deno_blob_clone) {
+    data = deserializeBlob(data);
+  }
 
   for (let i = 0; i < arrayBufferIdsInTransferables.length; ++i) {
     const id = arrayBufferIdsInTransferables[i];
@@ -425,6 +460,12 @@ function deserializeJsMessageData(messageData) {
  * @returns {messagePort.MessageData}
  */
 function serializeJsMessageData(data, transferables) {
+  throwIfUncloneable(data);
+
+  if (ObjectPrototypeIsPrototypeOf(BlobPrototype, data)) {
+    data = { __deno_blob_clone: true, ...serializeBlob(data) };
+  }
+
   let options;
   const transferredArrayBuffers = [];
   if (transferables.length > 0) {
@@ -512,6 +553,7 @@ webidl.converters.StructuredSerializeOptions = webidl
 function structuredClone(value, options) {
   const prefix = "Failed to execute 'structuredClone'";
   webidl.requiredArguments(arguments.length, 1, prefix);
+  throwIfUncloneable(value);
   options = webidl.converters.StructuredSerializeOptions(
     options,
     prefix,
@@ -520,6 +562,9 @@ function structuredClone(value, options) {
 
   // Fast-path, avoiding round-trip serialization and deserialization
   if (options.transfer.length === 0) {
+    if (ObjectPrototypeIsPrototypeOf(BlobPrototype, value)) {
+      return deserializeBlob(serializeBlob(value));
+    }
     try {
       return core.structuredClone(value);
     } catch (e) {
@@ -536,6 +581,7 @@ function structuredClone(value, options) {
 
 export {
   deserializeJsMessageData,
+  markAsUncloneable,
   MessageChannel,
   MessagePort,
   MessagePortIdSymbol,
