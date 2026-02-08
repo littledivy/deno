@@ -18,12 +18,11 @@ use std::time::SystemTime;
 use deno_core::BufMutView;
 use deno_core::BufView;
 use deno_core::ResourceHandleFd;
+use deno_lib::standalone::virtual_fs::BinaryVfsEntry;
+use deno_lib::standalone::virtual_fs::BinaryVfsEntryKind;
+use deno_lib::standalone::virtual_fs::BinaryVfsView;
 use deno_lib::standalone::virtual_fs::FileSystemCaseSensitivity;
 use deno_lib::standalone::virtual_fs::OffsetWithLength;
-use deno_lib::standalone::virtual_fs::VfsEntry;
-use deno_lib::standalone::virtual_fs::VfsEntryRef;
-use deno_lib::standalone::virtual_fs::VirtualDirectory;
-use deno_lib::standalone::virtual_fs::VirtualFile;
 use deno_runtime::deno_fs::FileSystem;
 use deno_runtime::deno_fs::FsDirEntry;
 use deno_runtime::deno_fs::FsFileType;
@@ -83,7 +82,7 @@ impl DenoRtSys {
     newpath: &CheckedPath,
   ) -> std::io::Result<u64> {
     let old_file = self.0.file_entry(oldpath)?;
-    let old_file_bytes = self.0.read_file_all(old_file)?;
+    let old_file_bytes = self.0.read_file_all(&old_file)?;
     let len = old_file_bytes.len() as u64;
     RealFs
       .write_file_sync(
@@ -1061,9 +1060,19 @@ impl sys_traits::BaseEnvVar for DenoRtSys {
 
 #[derive(Debug)]
 pub struct VfsRoot {
-  pub dir: VirtualDirectory,
+  pub vfs_view: BinaryVfsView,
   pub root_path: PathBuf,
   pub start_file_offset: u64,
+}
+
+/// Represents a located entry in the VFS tree. Tracks the
+/// children_start/count for directory context.
+#[derive(Debug, Clone, Copy)]
+enum VfsPosition<'a> {
+  /// Root level (virtual root dir).
+  Root,
+  /// A specific entry.
+  Entry(BinaryVfsEntry<'a>),
 }
 
 impl VfsRoot {
@@ -1071,7 +1080,7 @@ impl VfsRoot {
     &'a self,
     path: &Path,
     case_sensitivity: FileSystemCaseSensitivity,
-  ) -> std::io::Result<(PathBuf, VfsEntryRef<'a>)> {
+  ) -> std::io::Result<(PathBuf, BinaryVfsEntry<'a>)> {
     self.find_entry_inner(path, &mut HashSet::new(), case_sensitivity)
   }
 
@@ -1080,17 +1089,19 @@ impl VfsRoot {
     path: &Path,
     seen: &mut HashSet<PathBuf>,
     case_sensitivity: FileSystemCaseSensitivity,
-  ) -> std::io::Result<(PathBuf, VfsEntryRef<'a>)> {
+  ) -> std::io::Result<(PathBuf, BinaryVfsEntry<'a>)> {
     let mut path = Cow::Borrowed(path);
     loop {
       let (resolved_path, entry) =
         self.find_entry_no_follow_inner(&path, seen, case_sensitivity)?;
-      match entry {
-        VfsEntryRef::Symlink(symlink) => {
+      match entry.kind() {
+        BinaryVfsEntryKind::Symlink => {
           if !seen.insert(path.to_path_buf()) {
             return Err(std::io::Error::other("circular symlinks"));
           }
-          path = Cow::Owned(symlink.resolve_dest_from_root(&self.root_path));
+          path = Cow::Owned(
+            entry.symlink_resolve_dest_from_root(&self.root_path),
+          );
         }
         _ => {
           return Ok((resolved_path, entry));
@@ -1103,7 +1114,7 @@ impl VfsRoot {
     &self,
     path: &Path,
     case_sensitivity: FileSystemCaseSensitivity,
-  ) -> std::io::Result<(PathBuf, VfsEntryRef<'_>)> {
+  ) -> std::io::Result<(PathBuf, BinaryVfsEntry<'_>)> {
     self.find_entry_no_follow_inner(path, &mut HashSet::new(), case_sensitivity)
   }
 
@@ -1112,7 +1123,7 @@ impl VfsRoot {
     path: &Path,
     seen: &mut HashSet<PathBuf>,
     case_sensitivity: FileSystemCaseSensitivity,
-  ) -> std::io::Result<(PathBuf, VfsEntryRef<'a>)> {
+  ) -> std::io::Result<(PathBuf, BinaryVfsEntry<'a>)> {
     let relative_path = match path.strip_prefix(&self.root_path) {
       Ok(p) => p,
       Err(_) => {
@@ -1123,55 +1134,127 @@ impl VfsRoot {
       }
     };
     let mut final_path = self.root_path.clone();
-    let mut current_entry = VfsEntryRef::Dir(&self.dir);
+    let mut current_pos = VfsPosition::Root;
+    let view = &self.vfs_view;
+
     for component in relative_path.components() {
       let component = component.as_os_str();
-      let current_dir = match current_entry {
-        VfsEntryRef::Dir(dir) => {
+      // Get children_start/count for the current position
+      let (children_start, children_count) = match current_pos {
+        VfsPosition::Root => {
           final_path.push(component);
-          dir
+          (view.root_children_start, view.root_children_count)
         }
-        VfsEntryRef::Symlink(symlink) => {
-          let dest = symlink.resolve_dest_from_root(&self.root_path);
-          let (resolved_path, entry) =
-            self.find_entry_inner(&dest, seen, case_sensitivity)?;
-          final_path = resolved_path; // overwrite with the new resolved path
-          match entry {
-            VfsEntryRef::Dir(dir) => {
-              final_path.push(component);
-              dir
-            }
-            _ => {
-              return Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "path not found",
-              ));
+        VfsPosition::Entry(entry) => match entry.kind() {
+          BinaryVfsEntryKind::Dir => {
+            final_path.push(component);
+            (entry.dir_children_start(), entry.dir_children_count())
+          }
+          BinaryVfsEntryKind::Symlink => {
+            let dest = entry.symlink_resolve_dest_from_root(&self.root_path);
+            let (resolved_path, resolved_entry) =
+              self.find_entry_inner(&dest, seen, case_sensitivity)?;
+            final_path = resolved_path;
+            match resolved_entry.kind() {
+              BinaryVfsEntryKind::Dir => {
+                final_path.push(component);
+                (
+                  resolved_entry.dir_children_start(),
+                  resolved_entry.dir_children_count(),
+                )
+              }
+              _ => {
+                return Err(std::io::Error::new(
+                  std::io::ErrorKind::NotFound,
+                  "path not found",
+                ));
+              }
             }
           }
-        }
-        _ => {
-          return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "path not found",
-          ));
-        }
+          _ => {
+            return Err(std::io::Error::new(
+              std::io::ErrorKind::NotFound,
+              "path not found",
+            ));
+          }
+        },
       };
       let component = component.to_string_lossy();
-      current_entry = current_dir
-        .entries
-        .get_by_name(&component, case_sensitivity)
+      let child_entry = view
+        .get_child_by_name(
+          children_start,
+          children_count,
+          &component,
+          case_sensitivity,
+        )
         .ok_or_else(|| {
           std::io::Error::new(std::io::ErrorKind::NotFound, "path not found")
-        })?
-        .as_ref();
+        })?;
+      current_pos = VfsPosition::Entry(child_entry);
     }
 
-    Ok((final_path, current_entry))
+    match current_pos {
+      VfsPosition::Root => {
+        // The path IS the root — we don't have a single root entry
+        // in the binary format. Synthesize a "dir" by returning
+        // a sentinel. But callers need a BinaryVfsEntry. We need
+        // to handle this differently.
+        //
+        // The root itself is not stored as an entry, but the callers
+        // (file_entry, dir_entry, stat, etc.) always resolve to
+        // concrete entries or the root dir. When path == root_path
+        // the relative_path is empty, so we never enter the loop
+        // and current_pos remains Root. We need a way to represent
+        // the root directory.
+        //
+        // We'll return an error-like sentinel but actually this case
+        // is handled in FileBackedVfs methods below.
+        Err(std::io::Error::new(
+          std::io::ErrorKind::Other,
+          "__vfs_root__",
+        ))
+      }
+      VfsPosition::Entry(entry) => Ok((final_path, entry)),
+    }
+  }
+
+  /// Resolves the root path to directory info. Returns Ok(true) if
+  /// the path equals the root path.
+  fn is_root_path(&self, path: &Path) -> bool {
+    path == self.root_path
+  }
+}
+
+/// Extracted file information from a BinaryVfsEntry.
+/// This avoids needing to keep a BinaryVfsEntry reference.
+#[derive(Debug, Clone)]
+pub struct VfsFileInfo {
+  pub name: String,
+  pub offset: OffsetWithLength,
+  pub is_valid_utf8: bool,
+  pub transpiled_offset: Option<OffsetWithLength>,
+  pub source_map_offset: Option<OffsetWithLength>,
+  pub cjs_export_analysis_offset: Option<OffsetWithLength>,
+  pub mtime: Option<u128>,
+}
+
+impl VfsFileInfo {
+  pub fn from_entry(entry: &BinaryVfsEntry<'_>) -> Self {
+    debug_assert_eq!(entry.kind(), BinaryVfsEntryKind::File);
+    Self {
+      name: entry.name().to_string(),
+      offset: entry.file_data_offset(),
+      is_valid_utf8: entry.file_is_valid_utf8(),
+      transpiled_offset: entry.file_transpiled_offset(),
+      source_map_offset: entry.file_source_map_offset(),
+      cjs_export_analysis_offset: entry.file_cjs_export_analysis_offset(),
+      mtime: entry.file_mtime(),
+    }
   }
 }
 
 pub struct FileBackedVfsFile {
-  file: VirtualFile,
+  file: VfsFileInfo,
   pos: RefCell<u64>,
   vfs: Arc<FileBackedVfs>,
 }
@@ -1416,23 +1499,25 @@ pub struct FileBackedVfsMetadata {
 }
 
 impl FileBackedVfsMetadata {
-  pub fn from_vfs_entry_ref(vfs_entry: VfsEntryRef) -> Self {
-    FileBackedVfsMetadata {
-      file_type: match vfs_entry {
-        VfsEntryRef::Dir(_) => sys_traits::FileType::Dir,
-        VfsEntryRef::File(_) => sys_traits::FileType::File,
-        VfsEntryRef::Symlink(_) => sys_traits::FileType::Symlink,
+  pub fn from_binary_entry(entry: &BinaryVfsEntry<'_>) -> Self {
+    match entry.kind() {
+      BinaryVfsEntryKind::Dir => FileBackedVfsMetadata {
+        file_type: sys_traits::FileType::Dir,
+        name: entry.name().to_string(),
+        len: 0,
+        mtime: None,
       },
-      name: vfs_entry.name().to_string(),
-      len: match vfs_entry {
-        VfsEntryRef::Dir(_) => 0,
-        VfsEntryRef::File(file) => file.offset.len,
-        VfsEntryRef::Symlink(_) => 0,
+      BinaryVfsEntryKind::File => FileBackedVfsMetadata {
+        file_type: sys_traits::FileType::File,
+        name: entry.name().to_string(),
+        len: entry.file_data_offset().len,
+        mtime: entry.file_mtime(),
       },
-      mtime: match vfs_entry {
-        VfsEntryRef::Dir(_) => None,
-        VfsEntryRef::File(file) => file.mtime,
-        VfsEntryRef::Symlink(_) => None,
+      BinaryVfsEntryKind::Symlink => FileBackedVfsMetadata {
+        file_type: sys_traits::FileType::Symlink,
+        name: entry.name().to_string(),
+        len: 0,
+        mtime: None,
       },
     }
   }
@@ -1501,6 +1586,9 @@ impl FileBackedVfs {
   }
 
   pub fn exists(&self, path: &Path) -> bool {
+    if self.fs_root.is_root_path(path) {
+      return true;
+    }
     self.fs_root.find_entry(path, self.case_sensitivity).is_ok()
   }
 
@@ -1510,23 +1598,41 @@ impl FileBackedVfs {
   ) -> std::io::Result<FileBackedVfsFile> {
     let file = self.file_entry(path)?;
     Ok(FileBackedVfsFile {
-      file: file.clone(),
+      file,
       vfs: self.clone(),
       pos: Default::default(),
     })
   }
 
+  /// Get the children entries for a directory path, handling root specially.
+  fn dir_children(
+    &self,
+    path: &Path,
+  ) -> std::io::Result<deno_lib::standalone::virtual_fs::BinaryVfsEntries<'_>>
+  {
+    if self.fs_root.is_root_path(path) {
+      return Ok(self.fs_root.vfs_view.root_children());
+    }
+    let (_, entry) = self.fs_root.find_entry(path, self.case_sensitivity)?;
+    match entry.kind() {
+      BinaryVfsEntryKind::Dir => Ok(entry.dir_children()),
+      BinaryVfsEntryKind::Symlink => unreachable!("find_entry follows symlinks"),
+      BinaryVfsEntryKind::File => {
+        Err(std::io::Error::other("path is a file"))
+      }
+    }
+  }
+
   pub fn read_dir(&self, path: &Path) -> std::io::Result<Vec<FsDirEntry>> {
-    let dir = self.dir_entry(path)?;
+    let children = self.dir_children(path)?;
     Ok(
-      dir
-        .entries
+      children
         .iter()
         .map(|entry| FsDirEntry {
           name: entry.name().to_string(),
-          is_file: matches!(entry, VfsEntry::File(_)),
-          is_directory: matches!(entry, VfsEntry::Dir(_)),
-          is_symlink: matches!(entry, VfsEntry::Symlink(_)),
+          is_file: entry.kind() == BinaryVfsEntryKind::File,
+          is_directory: entry.kind() == BinaryVfsEntryKind::Dir,
+          is_symlink: entry.kind() == BinaryVfsEntryKind::Symlink,
         })
         .collect(),
     )
@@ -1536,15 +1642,14 @@ impl FileBackedVfs {
     &self,
     path: &Path,
   ) -> std::io::Result<impl Iterator<Item = FileBackedVfsDirEntry> + use<>> {
-    let dir = self.dir_entry(path)?;
+    let children = self.dir_children(path)?;
     let path = path.to_path_buf();
     Ok(
-      dir
-        .entries
+      children
         .iter()
         .map(move |entry| FileBackedVfsDirEntry {
           parent_path: path.to_path_buf(),
-          metadata: FileBackedVfsMetadata::from_vfs_entry_ref(entry.as_ref()),
+          metadata: FileBackedVfsMetadata::from_binary_entry(&entry),
         })
         .collect::<Vec<_>>()
         .into_iter(),
@@ -1555,36 +1660,59 @@ impl FileBackedVfs {
     let (_, entry) = self
       .fs_root
       .find_entry_no_follow(path, self.case_sensitivity)?;
-    match entry {
-      VfsEntryRef::Symlink(symlink) => {
-        Ok(symlink.resolve_dest_from_root(&self.fs_root.root_path))
+    match entry.kind() {
+      BinaryVfsEntryKind::Symlink => {
+        Ok(entry.symlink_resolve_dest_from_root(&self.fs_root.root_path))
       }
-      VfsEntryRef::Dir(_) | VfsEntryRef::File(_) => {
-        Err(std::io::Error::other("not a symlink"))
-      }
+      _ => Err(std::io::Error::other("not a symlink")),
     }
   }
 
   pub fn lstat(&self, path: &Path) -> std::io::Result<FileBackedVfsMetadata> {
+    if self.fs_root.is_root_path(path) {
+      return Ok(FileBackedVfsMetadata {
+        file_type: sys_traits::FileType::Dir,
+        name: self.fs_root.root_path.file_name()
+          .unwrap_or_default()
+          .to_string_lossy()
+          .into_owned(),
+        len: 0,
+        mtime: None,
+      });
+    }
     let (_, entry) = self
       .fs_root
       .find_entry_no_follow(path, self.case_sensitivity)?;
-    Ok(FileBackedVfsMetadata::from_vfs_entry_ref(entry))
+    Ok(FileBackedVfsMetadata::from_binary_entry(&entry))
   }
 
   pub fn stat(&self, path: &Path) -> std::io::Result<FileBackedVfsMetadata> {
+    if self.fs_root.is_root_path(path) {
+      return Ok(FileBackedVfsMetadata {
+        file_type: sys_traits::FileType::Dir,
+        name: self.fs_root.root_path.file_name()
+          .unwrap_or_default()
+          .to_string_lossy()
+          .into_owned(),
+        len: 0,
+        mtime: None,
+      });
+    }
     let (_, entry) = self.fs_root.find_entry(path, self.case_sensitivity)?;
-    Ok(FileBackedVfsMetadata::from_vfs_entry_ref(entry))
+    Ok(FileBackedVfsMetadata::from_binary_entry(&entry))
   }
 
   pub fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
+    if self.fs_root.is_root_path(path) {
+      return Ok(self.fs_root.root_path.clone());
+    }
     let (path, _) = self.fs_root.find_entry(path, self.case_sensitivity)?;
     Ok(path)
   }
 
   pub fn read_file_all(
     &self,
-    file: &VirtualFile,
+    file: &VfsFileInfo,
   ) -> std::io::Result<Cow<'static, [u8]>> {
     self.read_file_offset_with_len(file.offset)
   }
@@ -1603,7 +1731,7 @@ impl FileBackedVfs {
 
   pub fn read_file(
     &self,
-    file: &VirtualFile,
+    file: &VfsFileInfo,
     pos: u64,
     buf: &mut [u8],
   ) -> std::io::Result<usize> {
@@ -1632,21 +1760,14 @@ impl FileBackedVfs {
     Ok(start as usize..end as usize)
   }
 
-  pub fn dir_entry(&self, path: &Path) -> std::io::Result<&VirtualDirectory> {
+  pub fn file_entry(&self, path: &Path) -> std::io::Result<VfsFileInfo> {
     let (_, entry) = self.fs_root.find_entry(path, self.case_sensitivity)?;
-    match entry {
-      VfsEntryRef::Dir(dir) => Ok(dir),
-      VfsEntryRef::Symlink(_) => unreachable!(),
-      VfsEntryRef::File(_) => Err(std::io::Error::other("path is a file")),
-    }
-  }
-
-  pub fn file_entry(&self, path: &Path) -> std::io::Result<&VirtualFile> {
-    let (_, entry) = self.fs_root.find_entry(path, self.case_sensitivity)?;
-    match entry {
-      VfsEntryRef::Dir(_) => Err(std::io::Error::other("path is a directory")),
-      VfsEntryRef::Symlink(_) => unreachable!(),
-      VfsEntryRef::File(file) => Ok(file),
+    match entry.kind() {
+      BinaryVfsEntryKind::Dir => {
+        Err(std::io::Error::other("path is a directory"))
+      }
+      BinaryVfsEntryKind::Symlink => unreachable!("find_entry follows symlinks"),
+      BinaryVfsEntryKind::File => Ok(VfsFileInfo::from_entry(&entry)),
     }
   }
 }
@@ -1674,7 +1795,7 @@ mod test {
   #[track_caller]
   fn read_file(vfs: &FileBackedVfs, path: &Path) -> String {
     let file = vfs.file_entry(path).unwrap();
-    String::from_utf8(vfs.read_file_all(file).unwrap().into_owned()).unwrap()
+    String::from_utf8(vfs.read_file_all(&file).unwrap().into_owned()).unwrap()
   }
 
   #[test]
@@ -1824,6 +1945,9 @@ mod test {
     builder: VfsBuilder,
     temp_dir: &TempDir,
   ) -> (PathBuf, FileBackedVfs) {
+    use deno_lib::standalone::virtual_fs::serialize_vfs_binary;
+    use deno_lib::standalone::virtual_fs::BinaryVfsView;
+
     let virtual_fs_file = temp_dir.path().join("virtual_fs");
     let vfs = builder.build();
     {
@@ -1833,16 +1957,21 @@ mod test {
       }
     }
     let dest_path = temp_dir.path().join("dest");
-    let data = std::fs::read(&virtual_fs_file).unwrap();
+    let vfs_file_data = std::fs::read(&virtual_fs_file).unwrap();
+
+    // Serialize the VFS entries to binary format
+    let vfs_binary = serialize_vfs_binary(&vfs.entries);
+    // Leak both to get 'static lifetimes for testing
+    let static_binary: &'static [u8] =
+      Box::leak(vfs_binary.into_boxed_slice());
+    let (_, vfs_view) = BinaryVfsView::from_bytes(static_binary).unwrap();
+
     (
       dest_path.to_path_buf(),
       FileBackedVfs::new(
-        Cow::Owned(data),
+        Cow::Owned(vfs_file_data),
         VfsRoot {
-          dir: VirtualDirectory {
-            name: "".to_string(),
-            entries: vfs.entries,
-          },
+          vfs_view,
           root_path: dest_path.to_path_buf(),
           start_file_offset: 0,
         },

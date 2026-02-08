@@ -342,7 +342,6 @@ impl VfsEntryRef<'_> {
   }
 }
 
-// todo(dsherret): we should store this more efficiently in the binary
 #[derive(Debug, Serialize, Deserialize)]
 pub enum VfsEntry {
   Dir(VirtualDirectory),
@@ -1073,5 +1072,754 @@ impl SymlinkTarget {
       Self::File(path) => path,
       Self::Dir(path) => path,
     }
+  }
+}
+
+// ============================================================================
+// Binary VFS format — zero-copy types and serialization
+// ============================================================================
+
+/// Magic bytes identifying the binary VFS format.
+pub const VFS_MAGIC: [u8; 4] = *b"VFS1";
+
+/// Entry type discriminants in the flat entry array.
+const ENTRY_TYPE_DIR: u8 = 0;
+const ENTRY_TYPE_FILE: u8 = 1;
+const ENTRY_TYPE_SYMLINK: u8 = 2;
+
+/// Flag bit: file contents are valid UTF-8.
+const FLAG_VALID_UTF8: u8 = 1 << 0;
+
+/// Fixed size of a single entry in the flat array: 80 bytes.
+const RAW_ENTRY_SIZE: usize = 80;
+
+/// Binary VFS header, 24 bytes.
+///
+/// ```text
+/// magic:                [u8; 4]  = "VFS1"
+/// string_table_len:     u32
+/// string_count:         u32
+/// entry_count:          u32
+/// root_children_start:  u32
+/// root_children_count:  u32
+/// ```
+const HEADER_SIZE: usize = 24;
+
+// StringRef is the conceptual format of the string index entries (8 bytes each:
+// offset: u32, len: u32). They are read directly from raw bytes at runtime
+// rather than being instantiated as Rust structs.
+
+// -- Write-side: serialize a `VirtualDirectoryEntries` tree into binary --
+
+/// Serialize a `VirtualDirectoryEntries` tree (+ root name) into the
+/// binary VFS format. Returns the serialized bytes.
+pub fn serialize_vfs_binary(entries: &VirtualDirectoryEntries) -> Vec<u8> {
+  struct Ctx {
+    strings: Vec<(u32, u32)>, // (offset, len) pairs
+    string_data: Vec<u8>,
+    string_map: HashMap<String, u32>, // dedup: string → id
+    entries: Vec<[u8; RAW_ENTRY_SIZE]>,
+    symlink_parts: Vec<u32>,
+  }
+
+  impl Ctx {
+    fn intern_string(&mut self, s: &str) -> u32 {
+      if let Some(&id) = self.string_map.get(s) {
+        return id;
+      }
+      let id = self.strings.len() as u32;
+      let offset = self.string_data.len() as u32;
+      let len = s.len() as u32;
+      self.string_data.extend_from_slice(s.as_bytes());
+      self.strings.push((offset, len));
+      self.string_map.insert(s.to_string(), id);
+      id
+    }
+
+  }
+
+  fn write_entries(ctx: &mut Ctx, entries: &VirtualDirectoryEntries) -> (u32, u32) {
+    // Allocate slots for children first so they are contiguous
+    let count = entries.len() as u32;
+    let start = ctx.entries.len() as u32;
+    // Reserve slots
+    for _ in 0..count {
+      ctx.entries.push([0u8; RAW_ENTRY_SIZE]);
+    }
+    // Fill each slot
+    for (i, entry) in entries.iter().enumerate() {
+      let slot_idx = start + i as u32;
+      let buf = match entry {
+        VfsEntry::Dir(dir) => {
+          let name_id = ctx.intern_string(&dir.name);
+          let (ch_start, ch_count) = write_entries(ctx, &dir.entries);
+          make_dir_entry(name_id, ch_start, ch_count)
+        }
+        VfsEntry::File(file) => {
+          let name_id = ctx.intern_string(&file.name);
+          make_file_entry(name_id, file)
+        }
+        VfsEntry::Symlink(symlink) => {
+          let name_id = ctx.intern_string(&symlink.name);
+          let parts_start = ctx.symlink_parts.len() as u32;
+          let parts_count = symlink.dest_parts.parts().len() as u32;
+          for part in symlink.dest_parts.parts() {
+            let part_id = ctx.intern_string(part);
+            ctx.symlink_parts.push(part_id);
+          }
+          make_symlink_entry(name_id, parts_start, parts_count)
+        }
+      };
+      ctx.entries[slot_idx as usize] = buf;
+    }
+    (start, count)
+  }
+
+  let mut ctx = Ctx {
+    strings: Vec::new(),
+    string_data: Vec::new(),
+    string_map: HashMap::new(),
+    entries: Vec::new(),
+    symlink_parts: Vec::new(),
+  };
+
+  let (root_children_start, root_children_count) = write_entries(&mut ctx, entries);
+
+  // Compute output size
+  let string_index_size = ctx.strings.len() * 8; // 8 bytes per StringRef
+  let entries_size = ctx.entries.len() * RAW_ENTRY_SIZE;
+  let symlink_parts_size = ctx.symlink_parts.len() * 4;
+  let total = HEADER_SIZE
+    + string_index_size
+    + ctx.string_data.len()
+    + symlink_parts_size
+    + 4 // symlink_parts_count
+    + entries_size;
+
+  let mut out = Vec::with_capacity(total);
+
+  // Header
+  out.extend_from_slice(&VFS_MAGIC);
+  out.extend_from_slice(&(ctx.string_data.len() as u32).to_le_bytes());
+  out.extend_from_slice(&(ctx.strings.len() as u32).to_le_bytes());
+  out.extend_from_slice(&(ctx.entries.len() as u32).to_le_bytes());
+  out.extend_from_slice(&root_children_start.to_le_bytes());
+  out.extend_from_slice(&root_children_count.to_le_bytes());
+
+  // String index
+  for &(offset, len) in &ctx.strings {
+    out.extend_from_slice(&offset.to_le_bytes());
+    out.extend_from_slice(&len.to_le_bytes());
+  }
+
+  // String data
+  out.extend_from_slice(&ctx.string_data);
+
+  // Symlink parts array
+  for &part_id in &ctx.symlink_parts {
+    out.extend_from_slice(&part_id.to_le_bytes());
+  }
+  out.extend_from_slice(&(ctx.symlink_parts.len() as u32).to_le_bytes());
+
+  // Entry array
+  for entry_buf in &ctx.entries {
+    out.extend_from_slice(entry_buf);
+  }
+
+  debug_assert_eq!(out.len(), total);
+  out
+}
+
+fn make_dir_entry(name_id: u32, children_start: u32, children_count: u32) -> [u8; RAW_ENTRY_SIZE] {
+  let mut buf = [0u8; RAW_ENTRY_SIZE];
+  buf[0] = ENTRY_TYPE_DIR;
+  // flags=0, pad=0
+  buf[4..8].copy_from_slice(&name_id.to_le_bytes());
+  // Union bytes start at offset 8
+  buf[8..12].copy_from_slice(&children_start.to_le_bytes());
+  buf[12..16].copy_from_slice(&children_count.to_le_bytes());
+  buf
+}
+
+fn make_file_entry(name_id: u32, file: &VirtualFile) -> [u8; RAW_ENTRY_SIZE] {
+  let mut buf = [0u8; RAW_ENTRY_SIZE];
+  buf[0] = ENTRY_TYPE_FILE;
+  let mut flags: u8 = 0;
+  if file.is_valid_utf8 {
+    flags |= FLAG_VALID_UTF8;
+  }
+  buf[1] = flags;
+  buf[4..8].copy_from_slice(&name_id.to_le_bytes());
+
+  // Union bytes at offset 8:
+  // data_offset: u64 @8
+  // data_len: u64 @16
+  // transpiled_offset: u64 @24
+  // transpiled_len: u64 @32
+  // source_map_offset: u64 @40
+  // source_map_len: u64 @48
+  // cjs_export_offset: u64 @56
+  // cjs_export_len: u64 @64
+  // mtime_ms: u64 @72
+  buf[8..16].copy_from_slice(&file.offset.offset.to_le_bytes());
+  buf[16..24].copy_from_slice(&file.offset.len.to_le_bytes());
+
+  if let Some(t) = &file.transpiled_offset {
+    buf[24..32].copy_from_slice(&t.offset.to_le_bytes());
+    buf[32..40].copy_from_slice(&t.len.to_le_bytes());
+  }
+  if let Some(s) = &file.source_map_offset {
+    buf[40..48].copy_from_slice(&s.offset.to_le_bytes());
+    buf[48..56].copy_from_slice(&s.len.to_le_bytes());
+  }
+  if let Some(c) = &file.cjs_export_analysis_offset {
+    buf[56..64].copy_from_slice(&c.offset.to_le_bytes());
+    buf[64..72].copy_from_slice(&c.len.to_le_bytes());
+  }
+  // mtime: store as u64 milliseconds (0 = absent)
+  let mtime_ms: u64 = file
+    .mtime
+    .map(|m| m.try_into().unwrap_or(u64::MAX))
+    .unwrap_or(0);
+  buf[72..80].copy_from_slice(&mtime_ms.to_le_bytes());
+
+  buf
+}
+
+fn make_symlink_entry(name_id: u32, parts_start: u32, parts_count: u32) -> [u8; RAW_ENTRY_SIZE] {
+  let mut buf = [0u8; RAW_ENTRY_SIZE];
+  buf[0] = ENTRY_TYPE_SYMLINK;
+  buf[4..8].copy_from_slice(&name_id.to_le_bytes());
+  buf[8..12].copy_from_slice(&parts_start.to_le_bytes());
+  buf[12..16].copy_from_slice(&parts_count.to_le_bytes());
+  buf
+}
+
+// -- Read-side: zero-copy view over mmap'd binary VFS data --
+
+/// Zero-copy view over the binary VFS section. All data is borrowed
+/// from the mmap'd section — no heap allocations.
+#[derive(Debug)]
+pub struct BinaryVfsView {
+  /// Byte slice containing the string index entries (8 bytes each).
+  string_index_data: &'static [u8],
+  /// Concatenated UTF-8 string data.
+  string_data: &'static [u8],
+  /// Byte slice of the flat entry array (RAW_ENTRY_SIZE bytes each).
+  entries_data: &'static [u8],
+  /// Symlink parts (string ids as u32 LE).
+  symlink_parts_data: &'static [u8],
+  /// Number of entries in the flat array.
+  _entry_count: u32,
+  /// Root directory children range.
+  pub root_children_start: u32,
+  pub root_children_count: u32,
+}
+
+/// A reference to a single entry in the binary VFS.
+#[derive(Debug, Clone, Copy)]
+pub struct BinaryVfsEntry<'a> {
+  data: &'a [u8], // exactly RAW_ENTRY_SIZE bytes
+  vfs: &'a BinaryVfsView,
+}
+
+/// What kind of entry this is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinaryVfsEntryKind {
+  Dir,
+  File,
+  Symlink,
+}
+
+impl BinaryVfsView {
+  /// Parse a binary VFS from the given data slice.
+  /// Returns `(remaining_input, view)`.
+  pub fn from_bytes(data: &'static [u8]) -> Result<(&'static [u8], Self), std::io::Error> {
+    if data.len() < HEADER_SIZE {
+      return Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "binary VFS data too short for header",
+      ));
+    }
+
+    // Parse header
+    let magic = &data[0..4];
+    if magic != VFS_MAGIC {
+      return Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "invalid VFS magic bytes",
+      ));
+    }
+    let string_table_len = u32::from_le_bytes(data[4..8].try_into().unwrap());
+    let string_count = u32::from_le_bytes(data[8..12].try_into().unwrap());
+    let entry_count = u32::from_le_bytes(data[12..16].try_into().unwrap());
+    let root_children_start = u32::from_le_bytes(data[16..20].try_into().unwrap());
+    let root_children_count = u32::from_le_bytes(data[20..24].try_into().unwrap());
+
+    let mut pos = HEADER_SIZE;
+
+    // String index
+    let string_index_size = string_count as usize * 8;
+    if data.len() < pos + string_index_size {
+      return Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "binary VFS data too short for string index",
+      ));
+    }
+    let string_index_data = &data[pos..pos + string_index_size];
+    pos += string_index_size;
+
+    // String data
+    let stl = string_table_len as usize;
+    if data.len() < pos + stl {
+      return Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "binary VFS data too short for string data",
+      ));
+    }
+    let string_data = &data[pos..pos + stl];
+    pos += stl;
+
+    // Symlink parts array + count
+    // The symlink_parts_count u32 comes AFTER the parts array.
+    // But we need the count to know how many parts there are.
+    // We stored it after the parts, so we need to scan ahead.
+    // Actually, looking at the write side: we write parts then count.
+    // So read count from the end of the parts section:
+    // We need to find the symlink_parts_count first. It's stored as a u32
+    // right after the symlink parts array. But we don't know the array
+    // length yet. We stored it AT THE END of the parts section.
+    //
+    // Layout: [parts...][symlink_parts_count: u32][entries...]
+    // Since entries are at the end, and we know entry_count and total
+    // remaining length, we can compute:
+    let entries_total_size = entry_count as usize * RAW_ENTRY_SIZE;
+    let remaining_before_entries = data.len() - pos - entries_total_size;
+    // remaining_before_entries = symlink_parts_data + 4 (for count)
+    if remaining_before_entries < 4 {
+      return Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "binary VFS data too short for symlink parts count",
+      ));
+    }
+    let symlink_parts_count_offset = pos + remaining_before_entries - 4;
+    let symlink_parts_count = u32::from_le_bytes(
+      data[symlink_parts_count_offset..symlink_parts_count_offset + 4]
+        .try_into()
+        .unwrap(),
+    );
+    let symlink_parts_byte_len = symlink_parts_count as usize * 4;
+    if remaining_before_entries != symlink_parts_byte_len + 4 {
+      return Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "binary VFS symlink parts size mismatch",
+      ));
+    }
+    let symlink_parts_data = &data[pos..pos + symlink_parts_byte_len];
+    pos += symlink_parts_byte_len + 4; // skip parts + count
+
+    // Entry array
+    if data.len() < pos + entries_total_size {
+      return Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "binary VFS data too short for entries",
+      ));
+    }
+    let entries_data = &data[pos..pos + entries_total_size];
+    pos += entries_total_size;
+
+    Ok((
+      &data[pos..],
+      Self {
+        string_index_data,
+        string_data,
+        entries_data,
+        symlink_parts_data,
+        _entry_count: entry_count,
+        root_children_start,
+        root_children_count,
+      },
+    ))
+  }
+
+  /// Look up a string by its ID (index into string table).
+  pub fn get_string(&self, id: u32) -> &'static str {
+    let idx_offset = id as usize * 8;
+    let offset = u32::from_le_bytes(
+      self.string_index_data[idx_offset..idx_offset + 4]
+        .try_into()
+        .unwrap(),
+    ) as usize;
+    let len = u32::from_le_bytes(
+      self.string_index_data[idx_offset + 4..idx_offset + 8]
+        .try_into()
+        .unwrap(),
+    ) as usize;
+    // SAFETY: the serializer wrote valid UTF-8 strings
+    unsafe { std::str::from_utf8_unchecked(&self.string_data[offset..offset + len]) }
+  }
+
+  /// Get an entry by its index in the flat array.
+  pub fn get_entry(&self, index: u32) -> BinaryVfsEntry<'_> {
+    let start = index as usize * RAW_ENTRY_SIZE;
+    BinaryVfsEntry {
+      data: &self.entries_data[start..start + RAW_ENTRY_SIZE],
+      vfs: self,
+    }
+  }
+
+  /// Get a slice of contiguous entries (e.g. children of a directory).
+  pub fn get_entries(&self, start: u32, count: u32) -> BinaryVfsEntries<'_> {
+    BinaryVfsEntries {
+      vfs: self,
+      start,
+      count,
+    }
+  }
+
+  /// Get the root children as an entries iterator.
+  pub fn root_children(&self) -> BinaryVfsEntries<'_> {
+    self.get_entries(self.root_children_start, self.root_children_count)
+  }
+
+  /// Get symlink destination parts (as string IDs).
+  fn get_symlink_part_string_id(&self, index: u32) -> u32 {
+    let offset = index as usize * 4;
+    u32::from_le_bytes(
+      self.symlink_parts_data[offset..offset + 4]
+        .try_into()
+        .unwrap(),
+    )
+  }
+
+  /// Binary search within a range of children for a name.
+  pub fn binary_search(
+    &self,
+    children_start: u32,
+    children_count: u32,
+    name: &str,
+    case_sensitivity: FileSystemCaseSensitivity,
+  ) -> Result<u32, u32> {
+    let mut low = 0u32;
+    let mut high = children_count;
+    while low < high {
+      let mid = low + (high - low) / 2;
+      let entry = self.get_entry(children_start + mid);
+      let entry_name = entry.name();
+      let cmp = match case_sensitivity {
+        FileSystemCaseSensitivity::Sensitive => entry_name.cmp(name),
+        FileSystemCaseSensitivity::Insensitive => entry_name
+          .chars()
+          .zip(name.chars())
+          .map(|(a, b)| a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase()))
+          .find(|&ord| ord != Ordering::Equal)
+          .unwrap_or_else(|| entry_name.len().cmp(&name.len())),
+      };
+      match cmp {
+        Ordering::Less => low = mid + 1,
+        Ordering::Greater => high = mid,
+        Ordering::Equal => return Ok(children_start + mid),
+      }
+    }
+    Err(low)
+  }
+
+  /// Convenience: look up an entry by name within a parent's children.
+  pub fn get_child_by_name(
+    &self,
+    children_start: u32,
+    children_count: u32,
+    name: &str,
+    case_sensitivity: FileSystemCaseSensitivity,
+  ) -> Option<BinaryVfsEntry<'_>> {
+    self
+      .binary_search(children_start, children_count, name, case_sensitivity)
+      .ok()
+      .map(|idx| self.get_entry(idx))
+  }
+}
+
+/// A contiguous range of entries in the binary VFS.
+#[derive(Debug, Clone)]
+pub struct BinaryVfsEntries<'a> {
+  vfs: &'a BinaryVfsView,
+  start: u32,
+  count: u32,
+}
+
+impl<'a> BinaryVfsEntries<'a> {
+  pub fn len(&self) -> usize {
+    self.count as usize
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.count == 0
+  }
+
+  pub fn get(&self, index: usize) -> Option<BinaryVfsEntry<'a>> {
+    if index < self.count as usize {
+      Some(self.vfs.get_entry(self.start + index as u32))
+    } else {
+      None
+    }
+  }
+
+  pub fn iter(&self) -> BinaryVfsEntriesIter<'a> {
+    BinaryVfsEntriesIter {
+      vfs: self.vfs,
+      current: self.start,
+      end: self.start + self.count,
+    }
+  }
+
+  pub fn get_by_name(
+    &self,
+    name: &str,
+    case_sensitivity: FileSystemCaseSensitivity,
+  ) -> Option<BinaryVfsEntry<'a>> {
+    self.vfs.get_child_by_name(
+      self.start,
+      self.count,
+      name,
+      case_sensitivity,
+    )
+  }
+}
+
+impl<'a> IntoIterator for &'a BinaryVfsEntries<'a> {
+  type Item = BinaryVfsEntry<'a>;
+  type IntoIter = BinaryVfsEntriesIter<'a>;
+  fn into_iter(self) -> Self::IntoIter {
+    self.iter()
+  }
+}
+
+pub struct BinaryVfsEntriesIter<'a> {
+  vfs: &'a BinaryVfsView,
+  current: u32,
+  end: u32,
+}
+
+impl<'a> Iterator for BinaryVfsEntriesIter<'a> {
+  type Item = BinaryVfsEntry<'a>;
+  fn next(&mut self) -> Option<Self::Item> {
+    if self.current >= self.end {
+      return None;
+    }
+    let entry = self.vfs.get_entry(self.current);
+    self.current += 1;
+    Some(entry)
+  }
+
+  fn size_hint(&self) -> (usize, Option<usize>) {
+    let remaining = (self.end - self.current) as usize;
+    (remaining, Some(remaining))
+  }
+}
+
+impl ExactSizeIterator for BinaryVfsEntriesIter<'_> {}
+
+impl<'a> BinaryVfsEntry<'a> {
+  /// The kind of this entry.
+  pub fn kind(&self) -> BinaryVfsEntryKind {
+    match self.data[0] {
+      ENTRY_TYPE_DIR => BinaryVfsEntryKind::Dir,
+      ENTRY_TYPE_FILE => BinaryVfsEntryKind::File,
+      ENTRY_TYPE_SYMLINK => BinaryVfsEntryKind::Symlink,
+      _ => panic!("invalid VFS entry type"),
+    }
+  }
+
+  fn name_id(&self) -> u32 {
+    u32::from_le_bytes(self.data[4..8].try_into().unwrap())
+  }
+
+  /// The name of this entry.
+  pub fn name(&self) -> &'static str {
+    self.vfs.get_string(self.name_id())
+  }
+
+  /// For directories: children start index.
+  pub fn dir_children_start(&self) -> u32 {
+    debug_assert_eq!(self.kind(), BinaryVfsEntryKind::Dir);
+    u32::from_le_bytes(self.data[8..12].try_into().unwrap())
+  }
+
+  /// For directories: children count.
+  pub fn dir_children_count(&self) -> u32 {
+    debug_assert_eq!(self.kind(), BinaryVfsEntryKind::Dir);
+    u32::from_le_bytes(self.data[12..16].try_into().unwrap())
+  }
+
+  /// For directories: get children as BinaryVfsEntries.
+  pub fn dir_children(&self) -> BinaryVfsEntries<'a> {
+    self.vfs.get_entries(self.dir_children_start(), self.dir_children_count())
+  }
+
+  /// For files: is_valid_utf8 flag.
+  pub fn file_is_valid_utf8(&self) -> bool {
+    self.data[1] & FLAG_VALID_UTF8 != 0
+  }
+
+  fn read_u64_at(&self, offset: usize) -> u64 {
+    u64::from_le_bytes(self.data[offset..offset + 8].try_into().unwrap())
+  }
+
+  /// For files: data offset and length.
+  pub fn file_data_offset(&self) -> OffsetWithLength {
+    OffsetWithLength {
+      offset: self.read_u64_at(8),
+      len: self.read_u64_at(16),
+    }
+  }
+
+  /// For files: transpiled offset and length (None if len==0).
+  pub fn file_transpiled_offset(&self) -> Option<OffsetWithLength> {
+    let o = self.read_u64_at(24);
+    let l = self.read_u64_at(32);
+    if l == 0 && o == 0 { None } else { Some(OffsetWithLength { offset: o, len: l }) }
+  }
+
+  /// For files: source map offset and length.
+  pub fn file_source_map_offset(&self) -> Option<OffsetWithLength> {
+    let o = self.read_u64_at(40);
+    let l = self.read_u64_at(48);
+    if l == 0 && o == 0 { None } else { Some(OffsetWithLength { offset: o, len: l }) }
+  }
+
+  /// For files: CJS export analysis offset and length.
+  pub fn file_cjs_export_analysis_offset(&self) -> Option<OffsetWithLength> {
+    let o = self.read_u64_at(56);
+    let l = self.read_u64_at(64);
+    if l == 0 && o == 0 { None } else { Some(OffsetWithLength { offset: o, len: l }) }
+  }
+
+  /// For files: mtime in milliseconds (None if 0).
+  pub fn file_mtime(&self) -> Option<u128> {
+    let ms = self.read_u64_at(72);
+    if ms == 0 { None } else { Some(ms as u128) }
+  }
+
+  /// For symlinks: resolve destination from root path.
+  pub fn symlink_resolve_dest_from_root(&self, root: &Path) -> PathBuf {
+    debug_assert_eq!(self.kind(), BinaryVfsEntryKind::Symlink);
+    let parts_start = u32::from_le_bytes(self.data[8..12].try_into().unwrap());
+    let parts_count = u32::from_le_bytes(self.data[12..16].try_into().unwrap());
+    let mut dest = root.to_path_buf();
+    for i in 0..parts_count {
+      let string_id = self.vfs.get_symlink_part_string_id(parts_start + i);
+      dest.push(self.vfs.get_string(string_id));
+    }
+    dest
+  }
+
+  /// For symlinks: get the parts as a vector of string references.
+  pub fn symlink_dest_parts(&self) -> Vec<&'static str> {
+    debug_assert_eq!(self.kind(), BinaryVfsEntryKind::Symlink);
+    let parts_start = u32::from_le_bytes(self.data[8..12].try_into().unwrap());
+    let parts_count = u32::from_le_bytes(self.data[12..16].try_into().unwrap());
+    (0..parts_count)
+      .map(|i| {
+        let string_id = self.vfs.get_symlink_part_string_id(parts_start + i);
+        self.vfs.get_string(string_id)
+      })
+      .collect()
+  }
+
+  /// For symlinks: display the destination parts as a joined string.
+  pub fn symlink_dest_display(&self) -> String {
+    self.symlink_dest_parts().join("/")
+  }
+}
+
+#[cfg(test)]
+mod binary_vfs_tests {
+  use super::*;
+
+  #[test]
+  fn test_roundtrip_binary_vfs() {
+    // Build a VirtualDirectoryEntries tree
+    let entries = VirtualDirectoryEntries::new(vec![
+      VfsEntry::Dir(VirtualDirectory {
+        name: "sub".to_string(),
+        entries: VirtualDirectoryEntries::new(vec![
+          VfsEntry::File(VirtualFile {
+            name: "hello.txt".to_string(),
+            offset: OffsetWithLength { offset: 0, len: 5 },
+            is_valid_utf8: true,
+            transpiled_offset: None,
+            cjs_export_analysis_offset: None,
+            source_map_offset: None,
+            mtime: Some(12345),
+          }),
+          VfsEntry::Symlink(VirtualSymlink {
+            name: "link.txt".to_string(),
+            dest_parts: VirtualSymlinkParts::from_path(Path::new("sub/hello.txt")),
+          }),
+        ]),
+      }),
+      VfsEntry::File(VirtualFile {
+        name: "root.txt".to_string(),
+        offset: OffsetWithLength { offset: 5, len: 10 },
+        is_valid_utf8: false,
+        transpiled_offset: Some(OffsetWithLength { offset: 15, len: 20 }),
+        cjs_export_analysis_offset: Some(OffsetWithLength { offset: 35, len: 8 }),
+        source_map_offset: Some(OffsetWithLength { offset: 43, len: 12 }),
+        mtime: None,
+      }),
+    ]);
+
+    let serialized = serialize_vfs_binary(&entries);
+
+    // Leak to get 'static lifetime for testing
+    let static_data: &'static [u8] = Box::leak(serialized.into_boxed_slice());
+    let (remaining, view) = BinaryVfsView::from_bytes(static_data).unwrap();
+    assert!(remaining.is_empty());
+
+    // Check root children
+    let root = view.root_children();
+    assert_eq!(root.len(), 2);
+
+    // First child should be "root.txt" (sorted) or "sub" (sorted)
+    // "root.txt" < "sub" alphabetically
+    let first = root.get(0).unwrap();
+    assert_eq!(first.name(), "root.txt");
+    assert_eq!(first.kind(), BinaryVfsEntryKind::File);
+    assert!(!first.file_is_valid_utf8());
+    assert_eq!(first.file_data_offset().offset, 5);
+    assert_eq!(first.file_data_offset().len, 10);
+    assert_eq!(first.file_transpiled_offset().unwrap().offset, 15);
+    assert_eq!(first.file_cjs_export_analysis_offset().unwrap().offset, 35);
+    assert_eq!(first.file_source_map_offset().unwrap().offset, 43);
+    assert!(first.file_mtime().is_none());
+
+    let second = root.get(1).unwrap();
+    assert_eq!(second.name(), "sub");
+    assert_eq!(second.kind(), BinaryVfsEntryKind::Dir);
+
+    let children = second.dir_children();
+    assert_eq!(children.len(), 2);
+
+    let hello = children.get(0).unwrap();
+    assert_eq!(hello.name(), "hello.txt");
+    assert_eq!(hello.kind(), BinaryVfsEntryKind::File);
+    assert!(hello.file_is_valid_utf8());
+    assert_eq!(hello.file_mtime(), Some(12345));
+
+    let link = children.get(1).unwrap();
+    assert_eq!(link.name(), "link.txt");
+    assert_eq!(link.kind(), BinaryVfsEntryKind::Symlink);
+    assert_eq!(link.symlink_dest_display(), "sub/hello.txt");
+
+    // Test binary search
+    let found = view.binary_search(
+      view.root_children_start,
+      view.root_children_count,
+      "sub",
+      FileSystemCaseSensitivity::Sensitive,
+    );
+    assert!(found.is_ok());
+    let entry = view.get_entry(found.unwrap());
+    assert_eq!(entry.name(), "sub");
   }
 }

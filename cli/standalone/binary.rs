@@ -43,6 +43,7 @@ use deno_lib::standalone::virtual_fs::VfsEntry;
 use deno_lib::standalone::virtual_fs::VirtualDirectory;
 use deno_lib::standalone::virtual_fs::VirtualDirectoryEntries;
 use deno_lib::standalone::virtual_fs::WindowsSystemRootablePath;
+use deno_lib::standalone::virtual_fs::serialize_vfs_binary;
 use deno_lib::util::hash::FastInsecureHasher;
 use deno_lib::util::text_encoding::is_valid_utf8;
 use deno_lib::util::v8::construct_v8_flags;
@@ -1128,7 +1129,7 @@ fn serialize_binary_data_section(
   let metadata = serde_json::to_string(metadata)?;
   let npm_snapshot =
     npm_snapshot.map(serialize_npm_snapshot).unwrap_or_default();
-  let serialized_vfs = serde_json::to_string(&vfs.entries)?;
+  let serialized_vfs = serialize_vfs_binary(&vfs.entries);
 
   let remote_modules_len = Cell::new(0);
   let metadata_len = Cell::new(0);

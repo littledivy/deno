@@ -25,8 +25,7 @@ use deno_lib::standalone::binary::Metadata;
 use deno_lib::standalone::binary::RemoteModuleEntry;
 use deno_lib::standalone::binary::SpecifierDataStore;
 use deno_lib::standalone::binary::SpecifierId;
-use deno_lib::standalone::virtual_fs::VirtualDirectory;
-use deno_lib::standalone::virtual_fs::VirtualDirectoryEntries;
+use deno_lib::standalone::virtual_fs::BinaryVfsView;
 use deno_media_type::MediaType;
 use deno_npm::NpmPackageId;
 use deno_npm::resolution::SerializedNpmResolutionSnapshot;
@@ -75,7 +74,7 @@ pub fn extract_standalone(
     mut metadata,
     npm_snapshot,
     modules_store: remote_modules,
-    vfs_root_entries,
+    vfs_view,
     vfs_files_data,
   } = deserialize_binary_data_section(&root_url, data)?;
 
@@ -86,15 +85,7 @@ pub fn extract_standalone(
   }
   let vfs = {
     let fs_root = VfsRoot {
-      dir: VirtualDirectory {
-        // align the name of the directory with the root dir
-        name: root_path
-          .file_name()
-          .unwrap()
-          .to_string_lossy()
-          .into_owned(),
-        entries: vfs_root_entries,
-      },
+      vfs_view,
       root_path: root_path.clone(),
       start_file_offset: 0,
     };
@@ -197,7 +188,7 @@ pub struct DeserializedDataSection {
   pub metadata: Metadata,
   pub npm_snapshot: Option<ValidSerializedNpmResolutionSnapshot>,
   pub modules_store: RemoteModulesStore,
-  pub vfs_root_entries: VirtualDirectoryEntries,
+  pub vfs_view: BinaryVfsView,
   pub vfs_files_data: &'static [u8],
 }
 
@@ -247,9 +238,9 @@ pub fn deserialize_binary_data_section(
     SpecifierDataStore::<RemoteModuleEntry<'static>>::deserialize(input)
       .context("deserializing remote modules")?;
   // 6. VFS
-  let (input, data) = read_bytes_with_u64_len(input).context("vfs")?;
-  let vfs_root_entries: VirtualDirectoryEntries =
-    serde_json::from_slice(data).context("deserializing vfs data")?;
+  let (input, vfs_data) = read_bytes_with_u64_len(input).context("vfs")?;
+  let (_, vfs_view) = BinaryVfsView::from_bytes(vfs_data)
+    .context("deserializing binary vfs data")?;
   let (input, vfs_files_data) =
     read_bytes_with_u64_len(input).context("reading vfs files data")?;
 
@@ -269,7 +260,7 @@ pub fn deserialize_binary_data_section(
     metadata,
     npm_snapshot,
     modules_store,
-    vfs_root_entries,
+    vfs_view,
     vfs_files_data,
   })
 }
@@ -356,7 +347,7 @@ impl StandaloneModules {
         Ok(entry) => {
           let bytes = self
             .vfs
-            .read_file_all(entry)
+            .read_file_all(&entry)
             .map_err(JsErrorBox::from_err)?;
           is_valid_utf8 = entry.is_valid_utf8;
           transpiled = entry
