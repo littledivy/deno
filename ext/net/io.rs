@@ -91,6 +91,41 @@ where
   }
 }
 
+/// Trait for types that support non-blocking try_write.
+pub trait TryWrite {
+  fn try_write(&self, buf: &[u8]) -> Result<usize, std::io::Error>;
+}
+
+impl TryWrite for tcp::OwnedWriteHalf {
+  fn try_write(&self, buf: &[u8]) -> Result<usize, std::io::Error> {
+    tcp::OwnedWriteHalf::try_write(self, buf)
+  }
+}
+
+#[cfg(unix)]
+impl TryWrite for unix::OwnedWriteHalf {
+  fn try_write(&self, buf: &[u8]) -> Result<usize, std::io::Error> {
+    unix::OwnedWriteHalf::try_write(self, buf)
+  }
+}
+
+impl<R, W> FullDuplexResource<R, W>
+where
+  R: AsyncRead + Unpin + 'static,
+  W: AsyncWrite + Unpin + 'static + TryWrite,
+{
+  /// Attempt a synchronous (non-blocking) write. Returns bytes written
+  /// or WouldBlock if the write half is currently borrowed or the socket
+  /// buffer is full.
+  pub fn try_write_sync(self: &Rc<Self>, data: &[u8]) -> Result<usize, std::io::Error> {
+    let wr_ref = RcRef::map(self, |r| &r.wr);
+    let Some(wr) = wr_ref.try_borrow() else {
+      return Err(std::io::Error::from(std::io::ErrorKind::WouldBlock));
+    };
+    wr.try_write(data)
+  }
+}
+
 #[derive(Debug, thiserror::Error, deno_error::JsError)]
 pub enum MapError {
   #[class(inherit)]

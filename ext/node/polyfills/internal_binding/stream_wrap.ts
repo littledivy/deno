@@ -28,7 +28,8 @@
 // - https://github.com/nodejs/node/blob/master/src/stream_wrap.cc
 
 import { core, primordials } from "ext:core/mod.js";
-const { internalRidSymbol } = core;
+const { internalRidSymbol, rawAsyncOps, setCallback, __resolveCallback } = core;
+const rawStreamWrite = rawAsyncOps["op_node_stream_write"];
 const {
   Array,
   MapPrototypeGet,
@@ -40,7 +41,11 @@ const {
   Uint8Array,
   Uint8ArrayPrototype,
 } = primordials;
-import { op_can_write_vectored, op_raw_write_vectored } from "ext:core/ops";
+import {
+  op_can_write_vectored,
+  op_node_try_write,
+  op_raw_write_vectored,
+} from "ext:core/ops";
 
 import { TextEncoder } from "ext:deno_web/08_text_encoding.js";
 import { Buffer } from "node:buffer";
@@ -54,6 +59,10 @@ import {
 import { codeMap } from "ext:deno_node/internal_binding/uv.ts";
 import { _readWithCancelHandle } from "ext:deno_io/12_io.js";
 import { NodeTypeError } from "ext:deno_node/internal/errors.ts";
+import { kState } from "ext:deno_node/internal/streams/utils.js";
+
+// kSync from internal/streams/writable.js (1 << 9)
+const kSyncFlag = 1 << 9;
 
 export interface Reader {
   read(p: Uint8Array): Promise<number | null>;
@@ -90,9 +99,6 @@ export const kNumStreamBaseStateFields =
   StreamBaseStateFields.kNumStreamBaseStateFields;
 
 export const streamBaseState = new Uint8Array(5);
-
-// This is Deno, it always will be async.
-streamBaseState[kLastWriteWasAsync] = 1;
 
 export class WriteWrap<H extends HandleWrap> extends AsyncWrap {
   handle!: H;
@@ -210,8 +216,39 @@ export class LibuvStreamWrap extends HandleWrap {
       );
     }
 
-    this.#write(req, data);
+    if (this.upgrading) {
+      // TLS upgrade in progress - fall back to fully async path
+      streamBaseState[kLastWriteWasAsync] = 1;
+      this.#write(req, data);
+      return 0;
+    }
 
+    const rid = this[kStreamBaseField]![internalRidSymbol];
+
+    // 1. Try synchronous write (like Node's uv_try_write)
+    const nwritten = op_node_try_write(rid, data);
+    if (nwritten >= 0 && nwritten >= data.byteLength) {
+      // All data written synchronously. Clear kSync on the Writable
+      // state so that when afterWriteDispatched calls state.onwrite(),
+      // onwrite() sees sync=false and calls afterWrite() directly
+      // (instead of deferring via process.nextTick). This makes the
+      // write callback fire synchronously, matching Node's ordering.
+      // doWrite will also clear kSync after _write returns, but
+      // clearing an already-cleared bit is a no-op.
+      const owner = this[ownerSymbol];
+      if (owner?._writableState) {
+        owner._writableState[kState] &= ~kSyncFlag;
+      }
+      streamBaseState[kBytesWritten] = nwritten;
+      streamBaseState[kLastWriteWasAsync] = 0;
+      this.bytesWritten += nwritten;
+      return 0;
+    }
+
+    // 2. Async fallback with callback-based resolution
+    streamBaseState[kLastWriteWasAsync] = 1;
+    const remaining = nwritten > 0 ? data.subarray(nwritten) : data;
+    this.#writeWithCallback(req, remaining);
     return 0;
   }
 
@@ -429,7 +466,47 @@ export class LibuvStreamWrap extends HandleWrap {
   }
 
   /**
-   * Internal method for writing to the attached stream.
+   * Callback-based async write. Uses negative promise IDs so the
+   * completion fires during eventLoopTick (before microtasks), matching
+   * Node.js write callback ordering.
+   */
+  #writeWithCallback(req: WriteWrap<LibuvStreamWrap>, data: Uint8Array) {
+    const rid = this[kStreamBaseField]![internalRidSymbol];
+    const cbId = core.nextCallbackId++;
+
+    setCallback(cbId, (_res: unknown, isOk: boolean) => {
+      if (!isOk) {
+        try {
+          req.oncomplete(MapPrototypeGet(codeMap, "UNKNOWN")!);
+        } catch {
+          // swallow callback errors.
+        }
+        return;
+      }
+      streamBaseState[kBytesWritten] = data.byteLength;
+      this.bytesWritten += data.byteLength;
+      try {
+        req.oncomplete(0);
+      } catch {
+        // swallow callback errors.
+      }
+    });
+
+    // Call the raw async op with a negative callback ID.
+    // The Rust op driver treats promise_id as an opaque i32; negative
+    // values signal callback-based resolution in eventLoopTick.
+    const negId = -(cbId + 1);
+    const maybeResult = rawStreamWrite(negId, rid, data);
+    if (maybeResult !== undefined) {
+      // Eager completion - fire callback synchronously now
+      __resolveCallback(cbId, maybeResult, true);
+    }
+  }
+
+  /**
+   * Internal method for writing to the attached stream (async path).
+   * Used only during TLS upgrades where we must wait for the upgrade
+   * to complete before writing.
    * @param req A write request wrapper.
    * @param data The Uint8Array buffer to write to the stream.
    */
