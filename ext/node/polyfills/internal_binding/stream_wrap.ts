@@ -28,8 +28,7 @@
 // - https://github.com/nodejs/node/blob/master/src/stream_wrap.cc
 
 import { core, primordials } from "ext:core/mod.js";
-const { internalRidSymbol, rawAsyncOps, setCallback, __resolveCallback } = core;
-const rawStreamWrite = rawAsyncOps["op_node_stream_write"];
+const { internalRidSymbol, asyncOpWithCallback } = core;
 const {
   Array,
   MapPrototypeGet,
@@ -472,9 +471,8 @@ export class LibuvStreamWrap extends HandleWrap {
    */
   #writeWithCallback(req: WriteWrap<LibuvStreamWrap>, data: Uint8Array) {
     const rid = this[kStreamBaseField]![internalRidSymbol];
-    const cbId = core.nextCallbackId++;
 
-    setCallback(cbId, (_res: unknown, isOk: boolean) => {
+    const callback = (_res: unknown, isOk: boolean) => {
       if (!isOk) {
         try {
           req.oncomplete(MapPrototypeGet(codeMap, "UNKNOWN")!);
@@ -490,17 +488,14 @@ export class LibuvStreamWrap extends HandleWrap {
       } catch {
         // swallow callback errors.
       }
-    });
+    };
 
-    // Call the raw async op with a negative callback ID.
-    // The Rust op driver treats promise_id as an opaque i32; negative
-    // values signal callback-based resolution in eventLoopTick.
-    const negId = -(cbId + 1);
-    const maybeResult = rawStreamWrite(negId, rid, data);
-    if (maybeResult !== undefined) {
-      // Eager completion - fire callback synchronously now
-      __resolveCallback(cbId, maybeResult, true);
-    }
+    asyncOpWithCallback(
+      "op_node_stream_write",
+      callback,
+      rid,
+      data,
+    );
   }
 
   /**
