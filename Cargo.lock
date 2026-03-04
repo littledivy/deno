@@ -622,7 +622,7 @@ dependencies = [
  "bitflags 2.9.3",
  "cexpr",
  "clang-sys",
- "itertools 0.10.5",
+ "itertools 0.12.1",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -6311,7 +6311,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4979f22fdb869068da03c9f7528f8297c6fd2606bc3a4affe42e6a823fdb8da4"
 dependencies = [
  "cfg-if",
- "windows-targets 0.52.6",
+ "windows-targets 0.48.5",
 ]
 
 [[package]]
@@ -6323,7 +6323,7 @@ checksum = "4ec2a862134d2a7d32d7983ddcdd1c4923530833c9f2ea1a44fc5fa473989058"
 [[package]]
 name = "libnghttp2"
 version = "1.68.0-rc.0"
-source = "git+https://github.com/littledivy/libnghttp2?branch=main#03e82f01b6ebb98ce63b3024d6ac8945b5141e63"
+source = "git+https://github.com/littledivy/libnghttp2?branch=main#72ea8e65db66ca45615505e27cef4405a8937b62"
 dependencies = [
  "bindgen 0.71.1",
  "cc",
