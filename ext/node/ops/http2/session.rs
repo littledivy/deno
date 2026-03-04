@@ -1,5 +1,9 @@
 // Copyright 2018-2026 the Deno authors. MIT license.
 
+// On Windows MSVC, C enums are i32 while on Unix they're u32 when all values
+// are non-negative. These casts are necessary for Windows but redundant on Unix.
+#![allow(clippy::unnecessary_cast)]
+
 use std::cell::RefCell;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
@@ -228,7 +232,7 @@ unsafe extern "C" fn h2_read_cb(
     unsafe {
       ffi::nghttp2_session_terminate_session(
         session.session,
-        ffi::NGHTTP2_CONNECT_ERROR,
+        ffi::NGHTTP2_CONNECT_ERROR as u32,
       );
     }
     // Run send to process the GOAWAY and stream close callbacks
@@ -512,7 +516,7 @@ fn frame_id(frame: *const ffi::nghttp2_frame) -> i32 {
   // SAFETY: frame is valid per nghttp2 callback contract
   unsafe {
     let frame = &*frame;
-    if frame.hd.type_ as u32 == ffi::NGHTTP2_PUSH_PROMISE {
+    if frame.hd.type_ as u32 == ffi::NGHTTP2_PUSH_PROMISE as u32 {
       frame.push_promise.promised_stream_id
     } else {
       frame.hd.stream_id
@@ -569,10 +573,10 @@ unsafe extern "C" fn on_begin_headers_callbacks(
             ng_session,
             ffi::NGHTTP2_FLAG_NONE as u8,
             id,
-            ffi::NGHTTP2_REFUSED_STREAM,
+            ffi::NGHTTP2_REFUSED_STREAM as u32,
           );
         }
-        return ffi::NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
+        return ffi::NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE as i32;
       }
       let (obj, stream) = Http2Stream::new(session, id, cat);
       stream.start_headers(cat);
@@ -609,10 +613,10 @@ unsafe extern "C" fn on_header_callback(
           session.session,
           ffi::NGHTTP2_FLAG_NONE as u8,
           id,
-          ffi::NGHTTP2_ENHANCE_YOUR_CALM,
+          ffi::NGHTTP2_ENHANCE_YOUR_CALM as u32,
         );
       }
-      return ffi::NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
+      return ffi::NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE as i32;
     }
   }
 
@@ -629,38 +633,40 @@ unsafe extern "C" fn on_frame_recv_callback(
 
   let ft = frame_type(frame);
   let ff = frame_flags(frame);
-  match ft as u32 {
-    ffi::NGHTTP2_DATA => {
+  match ft as i32 {
+    x if x == ffi::NGHTTP2_DATA as i32 => {
       if ff & ffi::NGHTTP2_FLAG_END_STREAM as u8 != 0 {
         handle_data_end_stream(session, frame);
       }
     }
-    ffi::NGHTTP2_PUSH_PROMISE | ffi::NGHTTP2_HEADERS => {
+    x if x == ffi::NGHTTP2_PUSH_PROMISE as i32
+      || x == ffi::NGHTTP2_HEADERS as i32 =>
+    {
       handle_headers_frame(session, frame);
       if ff & ffi::NGHTTP2_FLAG_END_STREAM as u8 != 0 {
         handle_data_end_stream(session, frame);
       }
     }
-    ffi::NGHTTP2_SETTINGS => {
+    x if x == ffi::NGHTTP2_SETTINGS as i32 => {
       // Only fire for non-ACK SETTINGS frames (the peer's actual settings).
       // ACK frames are acknowledgments of our own settings.
       if ff & ffi::NGHTTP2_FLAG_ACK as u8 == 0 {
         handle_settings_frame(session);
       }
     }
-    ffi::NGHTTP2_PRIORITY => {
+    x if x == ffi::NGHTTP2_PRIORITY as i32 => {
       handle_priority_frame(session, frame);
     }
-    ffi::NGHTTP2_GOAWAY => {
+    x if x == ffi::NGHTTP2_GOAWAY as i32 => {
       handle_goaway_frame(session, frame);
     }
-    ffi::NGHTTP2_PING => {
+    x if x == ffi::NGHTTP2_PING as i32 => {
       handle_ping_frame(session);
     }
-    ffi::NGHTTP2_ALTSVC => {
+    x if x == ffi::NGHTTP2_ALTSVC as i32 => {
       handle_alt_svc_frame(session, frame);
     }
-    ffi::NGHTTP2_ORIGIN => {
+    x if x == ffi::NGHTTP2_ORIGIN as i32 => {
       handle_origin_frame(session, frame);
     }
     _ => {}
@@ -1087,10 +1093,12 @@ pub unsafe extern "C" fn on_stream_read_callback(
 
         if pending_data.is_empty() && *stream.writable_ended.borrow() {
           // SAFETY: data_flags is a valid out-pointer per nghttp2 contract
-          unsafe { *data_flags |= ffi::NGHTTP2_DATA_FLAG_EOF };
+          unsafe { *data_flags |= ffi::NGHTTP2_DATA_FLAG_EOF as u32 };
           if stream.has_trailers() {
             // SAFETY: data_flags is a valid out-pointer per nghttp2 contract
-            unsafe { *data_flags |= ffi::NGHTTP2_DATA_FLAG_NO_END_STREAM };
+            unsafe {
+              *data_flags |= ffi::NGHTTP2_DATA_FLAG_NO_END_STREAM as u32
+            };
             stream.on_trailers();
           }
           stream.complete_shutdown();
@@ -1102,10 +1110,10 @@ pub unsafe extern "C" fn on_stream_read_callback(
     if pending_data.is_empty() {
       if *stream.writable_ended.borrow() {
         // SAFETY: data_flags is a valid out-pointer per nghttp2 contract
-        unsafe { *data_flags |= ffi::NGHTTP2_DATA_FLAG_EOF };
+        unsafe { *data_flags |= ffi::NGHTTP2_DATA_FLAG_EOF as u32 };
         if stream.has_trailers() {
           // SAFETY: data_flags is a valid out-pointer per nghttp2 contract
-          unsafe { *data_flags |= ffi::NGHTTP2_DATA_FLAG_NO_END_STREAM };
+          unsafe { *data_flags |= ffi::NGHTTP2_DATA_FLAG_NO_END_STREAM as u32 };
           stream.on_trailers();
         }
         stream.complete_shutdown();
@@ -1637,8 +1645,8 @@ impl Http2Session {
       // SAFETY: self.inner was allocated by Box::into_raw and is valid
       let session = unsafe { &mut *self.inner };
       let (obj, stream) =
-        Http2Stream::new(session, ret, ffi::NGHTTP2_HCAT_HEADERS);
-      stream.start_headers(ffi::NGHTTP2_HCAT_HEADERS);
+        Http2Stream::new(session, ret, ffi::NGHTTP2_HCAT_HEADERS as _);
+      stream.start_headers(ffi::NGHTTP2_HCAT_HEADERS as _);
       if (options & STREAM_OPTION_GET_TRAILERS) != 0 {
         stream.set_has_trailers(true);
       }
@@ -1858,37 +1866,37 @@ impl Http2Session {
       buffer[SettingsIndex::HeaderTableSize as usize] =
         ffi::nghttp2_session_get_local_settings(
           self.session,
-          ffi::NGHTTP2_SETTINGS_HEADER_TABLE_SIZE,
+          ffi::NGHTTP2_SETTINGS_HEADER_TABLE_SIZE as _,
         ) as u32;
       buffer[SettingsIndex::EnablePush as usize] =
         ffi::nghttp2_session_get_local_settings(
           self.session,
-          ffi::NGHTTP2_SETTINGS_ENABLE_PUSH,
+          ffi::NGHTTP2_SETTINGS_ENABLE_PUSH as _,
         ) as u32;
       buffer[SettingsIndex::MaxConcurrentStreams as usize] =
         ffi::nghttp2_session_get_local_settings(
           self.session,
-          ffi::NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS,
+          ffi::NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS as _,
         ) as u32;
       buffer[SettingsIndex::InitialWindowSize as usize] =
         ffi::nghttp2_session_get_local_settings(
           self.session,
-          ffi::NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE,
+          ffi::NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE as _,
         ) as u32;
       buffer[SettingsIndex::MaxFrameSize as usize] =
         ffi::nghttp2_session_get_local_settings(
           self.session,
-          ffi::NGHTTP2_SETTINGS_MAX_FRAME_SIZE,
+          ffi::NGHTTP2_SETTINGS_MAX_FRAME_SIZE as _,
         ) as u32;
       buffer[SettingsIndex::MaxHeaderListSize as usize] =
         ffi::nghttp2_session_get_local_settings(
           self.session,
-          ffi::NGHTTP2_SETTINGS_MAX_HEADER_LIST_SIZE,
+          ffi::NGHTTP2_SETTINGS_MAX_HEADER_LIST_SIZE as _,
         ) as u32;
       buffer[SettingsIndex::EnableConnectProtocol as usize] =
         ffi::nghttp2_session_get_local_settings(
           self.session,
-          ffi::NGHTTP2_SETTINGS_ENABLE_CONNECT_PROTOCOL,
+          ffi::NGHTTP2_SETTINGS_ENABLE_CONNECT_PROTOCOL as _,
         ) as u32;
     });
   }
@@ -1900,37 +1908,37 @@ impl Http2Session {
       buffer[SettingsIndex::HeaderTableSize as usize] =
         ffi::nghttp2_session_get_remote_settings(
           self.session,
-          ffi::NGHTTP2_SETTINGS_HEADER_TABLE_SIZE,
+          ffi::NGHTTP2_SETTINGS_HEADER_TABLE_SIZE as _,
         ) as u32;
       buffer[SettingsIndex::EnablePush as usize] =
         ffi::nghttp2_session_get_remote_settings(
           self.session,
-          ffi::NGHTTP2_SETTINGS_ENABLE_PUSH,
+          ffi::NGHTTP2_SETTINGS_ENABLE_PUSH as _,
         ) as u32;
       buffer[SettingsIndex::MaxConcurrentStreams as usize] =
         ffi::nghttp2_session_get_remote_settings(
           self.session,
-          ffi::NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS,
+          ffi::NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS as _,
         ) as u32;
       buffer[SettingsIndex::InitialWindowSize as usize] =
         ffi::nghttp2_session_get_remote_settings(
           self.session,
-          ffi::NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE,
+          ffi::NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE as _,
         ) as u32;
       buffer[SettingsIndex::MaxFrameSize as usize] =
         ffi::nghttp2_session_get_remote_settings(
           self.session,
-          ffi::NGHTTP2_SETTINGS_MAX_FRAME_SIZE,
+          ffi::NGHTTP2_SETTINGS_MAX_FRAME_SIZE as _,
         ) as u32;
       buffer[SettingsIndex::MaxHeaderListSize as usize] =
         ffi::nghttp2_session_get_remote_settings(
           self.session,
-          ffi::NGHTTP2_SETTINGS_MAX_HEADER_LIST_SIZE,
+          ffi::NGHTTP2_SETTINGS_MAX_HEADER_LIST_SIZE as _,
         ) as u32;
       buffer[SettingsIndex::EnableConnectProtocol as usize] =
         ffi::nghttp2_session_get_remote_settings(
           self.session,
-          ffi::NGHTTP2_SETTINGS_ENABLE_CONNECT_PROTOCOL,
+          ffi::NGHTTP2_SETTINGS_ENABLE_CONNECT_PROTOCOL as _,
         ) as u32;
     });
   }
