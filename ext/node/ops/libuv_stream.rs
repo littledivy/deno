@@ -392,7 +392,7 @@ impl TCP {
       uv_compat::uv_tcp_bind(
         tcp,
         sock_addr.as_ptr() as *const _,
-        sock_addr.len(),
+        sock_addr.len() as u32,
         0,
       )
     }
@@ -419,7 +419,7 @@ impl TCP {
       uv_compat::uv_tcp_bind(
         tcp,
         sock_addr.as_ptr() as *const _,
-        sock_addr.len(),
+        sock_addr.len() as u32,
         0,
       )
     }

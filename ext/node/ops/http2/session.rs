@@ -1075,7 +1075,7 @@ pub unsafe extern "C" fn on_stream_read_callback(
   data_flags: *mut u32,
   _source: *mut ffi::nghttp2_data_source,
   user_data: *mut c_void,
-) -> isize {
+) -> i64 {
   // SAFETY: user_data is the user_data pointer set during session creation
   let session = unsafe { Session::from_user_data(user_data) };
 
@@ -1103,7 +1103,7 @@ pub unsafe extern "C" fn on_stream_read_callback(
           }
           stream.complete_shutdown();
         }
-        return amount as isize;
+        return amount as i64;
       }
     }
 
@@ -1131,7 +1131,7 @@ unsafe extern "C" fn on_select_padding(
   frame: *const ffi::nghttp2_frame,
   max_payload_len: usize,
   user_data: *mut c_void,
-) -> isize {
+) -> i64 {
   // SAFETY: user_data is the user_data pointer set during session creation
   let session = unsafe { Session::from_user_data(user_data) };
   let padding = frame_header_length(frame);
@@ -1146,7 +1146,7 @@ unsafe extern "C" fn on_select_padding(
     }
   };
 
-  result as isize
+  result as i64
 }
 
 unsafe extern "C" fn on_frame_not_send_callback(
