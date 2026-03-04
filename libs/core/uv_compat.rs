@@ -14,6 +14,8 @@ use std::ffi::c_void;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::task::Context;
 use std::task::Poll;
 use std::task::Waker;
@@ -84,11 +86,20 @@ pub enum uv_handle_type {
   UV_PREPARE = 3,
   UV_CHECK = 4,
   UV_TCP = 12,
+  UV_TTY = 15,
+  UV_FILE = 17,
+  UV_NAMED_PIPE = 7,
 }
 
 const UV_HANDLE_ACTIVE: u32 = 1 << 0;
 const UV_HANDLE_REF: u32 = 1 << 1;
 const UV_HANDLE_CLOSING: u32 = 1 << 2;
+const UV_HANDLE_BLOCKING_WRITES: u32 = 1 << 3;
+const UV_HANDLE_TTY_READABLE: u32 = 1 << 4;
+
+pub const UV_TTY_MODE_NORMAL: c_int = 0;
+pub const UV_TTY_MODE_RAW: c_int = 1;
+pub const UV_TTY_MODE_IO: c_int = 2;
 
 // libuv-compatible error codes (negative errno values on unix,
 // which vary depending on platform, fixed values on windows).
@@ -110,6 +121,17 @@ uv_errno!(UV_ENOTCONN, libc::ENOTCONN, -4053);
 uv_errno!(UV_ECANCELED, libc::ECANCELED, -4081);
 uv_errno!(UV_EPIPE, libc::EPIPE, -4047);
 pub const UV_EOF: i32 = -4095;
+uv_errno!(UV_ENOTSUP, libc::ENOTSUP, -4049);
+uv_errno!(UV_EIO, libc::EIO, -4070);
+
+/// Global state for `uv_tty_reset_mode` (async-signal-safe).
+#[cfg(unix)]
+static TTY_RESET_LOCK: AtomicBool = AtomicBool::new(false);
+#[cfg(unix)]
+static mut TTY_RESET_FD: c_int = -1;
+#[cfg(unix)]
+static mut TTY_RESET_TERMIOS: std::mem::MaybeUninit<libc::termios> =
+  std::mem::MaybeUninit::uninit();
 
 #[repr(C)]
 pub struct uv_loop_t {
@@ -198,6 +220,28 @@ pub struct uv_tcp_t {
   internal_backlog: VecDeque<tokio::net::TcpStream>,
 }
 
+#[repr(C)]
+pub struct uv_tty_t {
+  pub r#type: uv_handle_type,
+  pub loop_: *mut uv_loop_t,
+  pub data: *mut c_void,
+  pub flags: u32,
+  internal_mode: c_int,
+  #[cfg(unix)]
+  internal_fd: std::os::unix::io::RawFd,
+  #[cfg(unix)]
+  internal_orig_termios: Option<libc::termios>,
+  #[cfg(unix)]
+  internal_async_fd:
+    Option<tokio::io::unix::AsyncFd<std::os::unix::io::OwnedFd>>,
+  #[cfg(windows)]
+  internal_handle: *mut c_void,
+  internal_alloc_cb: Option<uv_alloc_cb>,
+  internal_read_cb: Option<uv_read_cb>,
+  internal_reading: bool,
+  internal_write_queue: VecDeque<WritePending>,
+}
+
 /// In-flight TCP connect operation.
 ///
 /// # Safety
@@ -276,6 +320,7 @@ pub type UvHandle = uv_handle_t;
 pub type UvLoop = uv_loop_t;
 pub type UvStream = uv_stream_t;
 pub type UvTcp = uv_tcp_t;
+pub type UvTty = uv_tty_t;
 pub type UvWrite = uv_write_t;
 pub type UvBuf = uv_buf_t;
 pub type UvConnect = uv_connect_t;
@@ -295,6 +340,7 @@ pub(crate) struct UvLoopInner {
   prepare_handles: RefCell<Vec<*mut uv_prepare_t>>,
   check_handles: RefCell<Vec<*mut uv_check_t>>,
   tcp_handles: RefCell<Vec<*mut uv_tcp_t>>,
+  tty_handles: RefCell<Vec<*mut uv_tty_t>>,
   waker: RefCell<Option<Waker>>,
   closing_handles: RefCell<VecDeque<(*mut uv_handle_t, Option<uv_close_cb>)>>,
   time_origin: Instant,
@@ -310,6 +356,7 @@ impl UvLoopInner {
       prepare_handles: RefCell::new(Vec::with_capacity(8)),
       check_handles: RefCell::new(Vec::with_capacity(8)),
       tcp_handles: RefCell::new(Vec::with_capacity(8)),
+      tty_handles: RefCell::new(Vec::with_capacity(4)),
       waker: RefCell::new(None),
       closing_handles: RefCell::new(VecDeque::with_capacity(16)),
       time_origin: Instant::now(),
@@ -375,6 +422,15 @@ impl UvLoopInner {
     }
     for handle_ptr in self.tcp_handles.borrow().iter() {
       // SAFETY: Handle pointers in tcp_handles are kept valid by the C caller until uv_close.
+      let handle = unsafe { &**handle_ptr };
+      if handle.flags & UV_HANDLE_ACTIVE != 0
+        && handle.flags & UV_HANDLE_REF != 0
+      {
+        return true;
+      }
+    }
+    for handle_ptr in self.tty_handles.borrow().iter() {
+      // SAFETY: Handle pointers in tty_handles are kept valid by the C caller until uv_close.
       let handle = unsafe { &**handle_ptr };
       if handle.flags & UV_HANDLE_ACTIVE != 0
         && handle.flags & UV_HANDLE_REF != 0
@@ -719,7 +775,194 @@ impl UvLoopInner {
             }
           }
         }
-      } // end per-handle loop
+      } // end per-TCP-handle loop
+
+      // --- TTY handle I/O ---
+      #[cfg(unix)]
+      {
+        use std::os::unix::io::AsRawFd;
+        let mut j = 0;
+        loop {
+          let tty_ptr = {
+            let handles = self.tty_handles.borrow();
+            if j >= handles.len() {
+              break;
+            }
+            handles[j]
+          };
+          j += 1;
+          // SAFETY: tty_ptr comes from tty_handles; caller guarantees validity.
+          let tty = unsafe { &mut *tty_ptr };
+          if tty.flags & UV_HANDLE_ACTIVE == 0 {
+            continue;
+          }
+
+          // Read
+          if tty.internal_reading && tty.internal_async_fd.is_some() {
+            let alloc_cb = tty.internal_alloc_cb;
+            let read_cb = tty.internal_read_cb;
+            if let (Some(alloc_cb), Some(read_cb)) = (alloc_cb, read_cb) {
+              let async_fd = tty.internal_async_fd.as_ref().unwrap();
+              let _ = async_fd.poll_read_ready(&mut cx);
+
+              loop {
+                if !tty.internal_reading || tty.internal_async_fd.is_none() {
+                  break;
+                }
+                let mut buf = uv_buf_t {
+                  base: std::ptr::null_mut(),
+                  len: 0,
+                };
+                unsafe {
+                  alloc_cb(tty_ptr as *mut uv_handle_t, 65536, &mut buf);
+                }
+                if buf.base.is_null() || buf.len == 0 {
+                  break;
+                }
+                let async_fd = tty.internal_async_fd.as_ref().unwrap();
+                match async_fd.try_io(tokio::io::Interest::READABLE, |fd| {
+                  let n = unsafe {
+                    libc::read(fd.as_raw_fd(), buf.base as *mut c_void, buf.len)
+                  };
+                  if n < 0 {
+                    Err(std::io::Error::last_os_error())
+                  } else {
+                    Ok(n as usize)
+                  }
+                }) {
+                  Ok(0) => {
+                    unsafe {
+                      read_cb(
+                        tty_ptr as *mut uv_stream_t,
+                        UV_EOF as isize,
+                        &buf,
+                      )
+                    };
+                    tty.internal_reading = false;
+                    break;
+                  }
+                  Ok(n) => {
+                    any_work = true;
+                    unsafe {
+                      read_cb(tty_ptr as *mut uv_stream_t, n as isize, &buf)
+                    };
+                  }
+                  Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    break;
+                  }
+                  Err(_) => {
+                    unsafe {
+                      read_cb(
+                        tty_ptr as *mut uv_stream_t,
+                        UV_EOF as isize,
+                        &buf,
+                      )
+                    };
+                    tty.internal_reading = false;
+                    break;
+                  }
+                }
+              }
+            }
+          }
+
+          // Write
+          if !tty.internal_write_queue.is_empty() {
+            if tty.flags & UV_HANDLE_BLOCKING_WRITES != 0 {
+              // Blocking writes (fallback for master PTYs)
+              while let Some(pw) = tty.internal_write_queue.front_mut() {
+                let mut done = false;
+                let mut error = false;
+                loop {
+                  if pw.offset >= pw.data.len() {
+                    done = true;
+                    break;
+                  }
+                  let n = unsafe {
+                    libc::write(
+                      tty.internal_fd,
+                      pw.data[pw.offset..].as_ptr() as *const c_void,
+                      pw.data.len() - pw.offset,
+                    )
+                  };
+                  if n > 0 {
+                    pw.offset += n as usize;
+                  } else {
+                    error = true;
+                    break;
+                  }
+                }
+                if done {
+                  let pw = tty.internal_write_queue.pop_front().unwrap();
+                  if let Some(cb) = pw.cb {
+                    unsafe { cb(pw.req, 0) };
+                  }
+                } else if error {
+                  let pw = tty.internal_write_queue.pop_front().unwrap();
+                  if let Some(cb) = pw.cb {
+                    unsafe { cb(pw.req, UV_EPIPE) };
+                  }
+                } else {
+                  break;
+                }
+              }
+            } else if tty.internal_async_fd.is_some() {
+              let async_fd = tty.internal_async_fd.as_ref().unwrap();
+              let _ = async_fd.poll_write_ready(&mut cx);
+
+              while let Some(pw) = tty.internal_write_queue.front_mut() {
+                let mut done = false;
+                let mut error = false;
+                loop {
+                  if pw.offset >= pw.data.len() {
+                    done = true;
+                    break;
+                  }
+                  let async_fd = tty.internal_async_fd.as_ref().unwrap();
+                  match async_fd.try_io(tokio::io::Interest::WRITABLE, |fd| {
+                    let n = unsafe {
+                      libc::write(
+                        fd.as_raw_fd(),
+                        pw.data[pw.offset..].as_ptr() as *const c_void,
+                        pw.data.len() - pw.offset,
+                      )
+                    };
+                    if n < 0 {
+                      Err(std::io::Error::last_os_error())
+                    } else {
+                      Ok(n as usize)
+                    }
+                  }) {
+                    Ok(n) => pw.offset += n,
+                    Err(ref e)
+                      if e.kind() == std::io::ErrorKind::WouldBlock =>
+                    {
+                      break;
+                    }
+                    Err(_) => {
+                      error = true;
+                      break;
+                    }
+                  }
+                }
+                if done {
+                  let pw = tty.internal_write_queue.pop_front().unwrap();
+                  if let Some(cb) = pw.cb {
+                    unsafe { cb(pw.req, 0) };
+                  }
+                } else if error {
+                  let pw = tty.internal_write_queue.pop_front().unwrap();
+                  if let Some(cb) = pw.cb {
+                    unsafe { cb(pw.req, UV_EPIPE) };
+                  }
+                } else {
+                  break;
+                }
+              }
+            }
+          }
+        } // end per-TTY-handle loop
+      }
 
       if !any_work {
         break;
@@ -798,6 +1041,44 @@ impl UvLoopInner {
       tcp.internal_listener = None;
       tcp.internal_backlog.clear();
       tcp.flags &= !UV_HANDLE_ACTIVE;
+    }
+  }
+
+  fn stop_tty(&self, handle: *mut uv_tty_t) {
+    self
+      .tty_handles
+      .borrow_mut()
+      .retain(|&h| !std::ptr::eq(h, handle));
+    // SAFETY: Caller guarantees handle is valid and initialized.
+    unsafe {
+      let tty = &mut *handle;
+      #[cfg(unix)]
+      {
+        // Restore original termios if saved
+        if let Some(ref orig) = tty.internal_orig_termios {
+          libc::tcsetattr(tty.internal_fd, libc::TCSANOW, orig);
+        }
+        // Clear static reset state if this fd matches
+        if TTY_RESET_FD == tty.internal_fd {
+          TTY_RESET_FD = -1;
+        }
+        // Drop the AsyncFd to deregister from tokio reactor
+        tty.internal_async_fd = None;
+      }
+      #[cfg(windows)]
+      {
+        if !tty.internal_handle.is_null() {
+          windows_sys::Win32::Foundation::CloseHandle(
+            tty.internal_handle as isize,
+          );
+          tty.internal_handle = std::ptr::null_mut();
+        }
+      }
+      tty.internal_reading = false;
+      tty.internal_alloc_cb = None;
+      tty.internal_read_cb = None;
+      tty.internal_write_queue.clear();
+      tty.flags &= !UV_HANDLE_ACTIVE;
     }
   }
 }
@@ -1197,6 +1478,9 @@ pub unsafe extern "C" fn uv_close(
       }
       uv_handle_type::UV_TCP => {
         inner.stop_tcp(handle as *mut uv_tcp_t);
+      }
+      uv_handle_type::UV_TTY => {
+        inner.stop_tty(handle as *mut uv_tty_t);
       }
       _ => {}
     }
@@ -1634,75 +1918,132 @@ pub unsafe fn uv_accept(
 }
 
 /// ### Safety
-/// `stream` must be a valid pointer to an initialized `uv_tcp_t` (cast as `uv_stream_t`).
+/// `stream` must be a valid pointer to an initialized stream handle (`uv_tcp_t` or `uv_tty_t`).
 pub unsafe fn uv_read_start(
   stream: *mut uv_stream_t,
   alloc_cb: Option<uv_alloc_cb>,
   read_cb: Option<uv_read_cb>,
 ) -> c_int {
-  // SAFETY: Caller guarantees stream is a valid, initialized uv_tcp_t.
   unsafe {
-    let tcp = stream as *mut uv_tcp_t;
-    let tcp_ref = &mut *tcp;
-    tcp_ref.internal_alloc_cb = alloc_cb;
-    tcp_ref.internal_read_cb = read_cb;
-    tcp_ref.internal_reading = true;
-    tcp_ref.flags |= UV_HANDLE_ACTIVE;
+    match (*stream).r#type {
+      uv_handle_type::UV_TCP => {
+        let tcp = stream as *mut uv_tcp_t;
+        let tcp_ref = &mut *tcp;
+        tcp_ref.internal_alloc_cb = alloc_cb;
+        tcp_ref.internal_read_cb = read_cb;
+        tcp_ref.internal_reading = true;
+        tcp_ref.flags |= UV_HANDLE_ACTIVE;
 
-    let inner = get_inner(tcp_ref.loop_);
-    let mut handles = inner.tcp_handles.borrow_mut();
-    if !handles.iter().any(|&h| std::ptr::eq(h, tcp)) {
-      handles.push(tcp);
+        let inner = get_inner(tcp_ref.loop_);
+        let mut handles = inner.tcp_handles.borrow_mut();
+        if !handles.iter().any(|&h| std::ptr::eq(h, tcp)) {
+          handles.push(tcp);
+        }
+      }
+      uv_handle_type::UV_TTY => {
+        let tty = stream as *mut uv_tty_t;
+        let tty_ref = &mut *tty;
+        tty_ref.internal_alloc_cb = alloc_cb;
+        tty_ref.internal_read_cb = read_cb;
+        tty_ref.internal_reading = true;
+        tty_ref.flags |= UV_HANDLE_ACTIVE;
+
+        let inner = get_inner(tty_ref.loop_);
+        let mut handles = inner.tty_handles.borrow_mut();
+        if !handles.iter().any(|&h| std::ptr::eq(h, tty)) {
+          handles.push(tty);
+        }
+      }
+      _ => return UV_EINVAL,
     }
   }
   0
 }
 
 /// ### Safety
-/// `stream` must be a valid pointer to an initialized `uv_tcp_t` (cast as `uv_stream_t`).
+/// `stream` must be a valid pointer to an initialized stream handle (`uv_tcp_t` or `uv_tty_t`).
 pub unsafe fn uv_read_stop(stream: *mut uv_stream_t) -> c_int {
-  // SAFETY: Caller guarantees stream is a valid, initialized uv_tcp_t.
   unsafe {
-    let tcp = stream as *mut uv_tcp_t;
-    let tcp_ref = &mut *tcp;
-    tcp_ref.internal_reading = false;
-    tcp_ref.internal_alloc_cb = None;
-    tcp_ref.internal_read_cb = None;
-    if tcp_ref.internal_connection_cb.is_none()
-      && tcp_ref.internal_connect.is_none()
-      && tcp_ref.internal_write_queue.is_empty()
-    {
-      tcp_ref.flags &= !UV_HANDLE_ACTIVE;
+    match (*stream).r#type {
+      uv_handle_type::UV_TCP => {
+        let tcp = stream as *mut uv_tcp_t;
+        let tcp_ref = &mut *tcp;
+        tcp_ref.internal_reading = false;
+        tcp_ref.internal_alloc_cb = None;
+        tcp_ref.internal_read_cb = None;
+        if tcp_ref.internal_connection_cb.is_none()
+          && tcp_ref.internal_connect.is_none()
+          && tcp_ref.internal_write_queue.is_empty()
+        {
+          tcp_ref.flags &= !UV_HANDLE_ACTIVE;
+        }
+      }
+      uv_handle_type::UV_TTY => {
+        let tty = stream as *mut uv_tty_t;
+        let tty_ref = &mut *tty;
+        tty_ref.internal_reading = false;
+        tty_ref.internal_alloc_cb = None;
+        tty_ref.internal_read_cb = None;
+        if tty_ref.internal_write_queue.is_empty() {
+          tty_ref.flags &= !UV_HANDLE_ACTIVE;
+        }
+      }
+      _ => return UV_EINVAL,
     }
   }
   0
 }
 
 /// ### Safety
-/// `handle` must be a valid pointer to an initialized `uv_tcp_t` (cast as `uv_stream_t`).
+/// `handle` must be a valid pointer to an initialized stream handle (`uv_tcp_t` or `uv_tty_t`).
 pub unsafe fn uv_try_write(handle: *mut uv_stream_t, data: &[u8]) -> i32 {
-  // SAFETY: Caller guarantees handle is a valid, initialized uv_tcp_t.
-  let tcp_ref = unsafe { &mut *(handle as *mut uv_tcp_t) };
-
-  if !tcp_ref.internal_write_queue.is_empty() {
-    return UV_EAGAIN;
-  }
-
-  let stream = match tcp_ref.internal_stream.as_ref() {
-    Some(s) => s,
-    None => return UV_EBADF,
-  };
-
-  match stream.try_write(data) {
-    Ok(n) => n as i32,
-    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => UV_EAGAIN,
-    Err(_) => UV_EPIPE,
+  unsafe {
+    match (*handle).r#type {
+      uv_handle_type::UV_TCP => {
+        let tcp_ref = &mut *(handle as *mut uv_tcp_t);
+        if !tcp_ref.internal_write_queue.is_empty() {
+          return UV_EAGAIN;
+        }
+        let stream = match tcp_ref.internal_stream.as_ref() {
+          Some(s) => s,
+          None => return UV_EBADF,
+        };
+        match stream.try_write(data) {
+          Ok(n) => n as i32,
+          Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => UV_EAGAIN,
+          Err(_) => UV_EPIPE,
+        }
+      }
+      #[cfg(unix)]
+      uv_handle_type::UV_TTY => {
+        let tty_ref = &mut *(handle as *mut uv_tty_t);
+        if !tty_ref.internal_write_queue.is_empty() {
+          return UV_EAGAIN;
+        }
+        let n = libc::write(
+          tty_ref.internal_fd,
+          data.as_ptr() as *const c_void,
+          data.len(),
+        );
+        if n >= 0 {
+          n as i32
+        } else {
+          let err = std::io::Error::last_os_error();
+          if err.kind() == std::io::ErrorKind::WouldBlock {
+            UV_EAGAIN
+          } else {
+            UV_EPIPE
+          }
+        }
+      }
+      _ => UV_EINVAL,
+    }
   }
 }
 
 /// ### Safety
 /// `req` must be valid and remain so until the write callback fires. `handle` must be an
-/// initialized `uv_tcp_t`. `bufs` must point to `nbufs` valid `uv_buf_t` entries.
+/// initialized stream handle. `bufs` must point to `nbufs` valid `uv_buf_t` entries.
 pub unsafe fn uv_write(
   req: *mut uv_write_t,
   handle: *mut uv_stream_t,
@@ -1712,9 +2053,30 @@ pub unsafe fn uv_write(
 ) -> c_int {
   // SAFETY: Caller guarantees all pointers are valid.
   unsafe {
+    (*req).handle = handle;
+
+    #[cfg(unix)]
+    if (*handle).r#type == uv_handle_type::UV_TTY {
+      let tty = handle as *mut uv_tty_t;
+      let tty_ref = &mut *tty;
+      let write_data = collect_bufs(bufs, nbufs);
+      tty_ref.internal_write_queue.push_back(WritePending {
+        req,
+        data: write_data,
+        offset: 0,
+        cb,
+      });
+      let inner = get_inner(tty_ref.loop_);
+      let mut handles = inner.tty_handles.borrow_mut();
+      if !handles.iter().any(|&h| std::ptr::eq(h, tty)) {
+        handles.push(tty);
+      }
+      tty_ref.flags |= UV_HANDLE_ACTIVE;
+      return 0;
+    }
+
     let tcp = handle as *mut uv_tcp_t;
     let tcp_ref = &mut *tcp;
-    (*req).handle = handle;
 
     let stream = match tcp_ref.internal_stream.as_ref() {
       Some(s) => s,
@@ -1871,7 +2233,7 @@ unsafe fn collect_bufs(bufs: *const uv_buf_t, nbufs: u32) -> Vec<u8> {
 }
 
 /// ### Safety
-/// `req` must be a valid, writable pointer. `stream` must be an initialized `uv_tcp_t`.
+/// `req` must be a valid, writable pointer. `stream` must be an initialized stream handle.
 /// `req` must remain valid until the shutdown callback fires.
 pub unsafe fn uv_shutdown(
   req: *mut uv_shutdown_t,
@@ -1880,9 +2242,17 @@ pub unsafe fn uv_shutdown(
 ) -> c_int {
   // SAFETY: Caller guarantees all pointers are valid.
   unsafe {
-    let tcp = stream as *mut uv_tcp_t;
     (*req).handle = stream;
 
+    // TTY shutdown is a no-op (just fire callback with success)
+    if (*stream).r#type == uv_handle_type::UV_TTY {
+      if let Some(cb) = cb {
+        cb(req, 0);
+      }
+      return 0;
+    }
+
+    let tcp = stream as *mut uv_tcp_t;
     let status = if let Some(ref stream) = (*tcp).internal_stream {
       #[cfg(unix)]
       {
@@ -1913,6 +2283,525 @@ pub unsafe fn uv_shutdown(
     }
   }
   0
+}
+
+// --- TTY functions ---
+
+/// ### Safety
+/// `loop_` must be initialized by `uv_loop_init`. `tty` must be a valid, writable pointer.
+/// `fd` must be a valid file descriptor. `readable` indicates whether the fd is readable.
+#[cfg(unix)]
+pub unsafe fn uv_tty_init(
+  loop_: *mut uv_loop_t,
+  tty: *mut uv_tty_t,
+  fd: c_int,
+  _readable: c_int,
+) -> c_int {
+  use std::os::unix::io::FromRawFd;
+  use std::os::unix::io::OwnedFd;
+  use std::ptr::addr_of_mut;
+  use std::ptr::write;
+
+  unsafe {
+    if libc::isatty(fd) == 0 {
+      return UV_EINVAL;
+    }
+
+    let flags_val = libc::fcntl(fd, libc::F_GETFL);
+    let access_mode = flags_val & libc::O_ACCMODE;
+
+    let mut use_fd = fd;
+    let mut blocking_writes = false;
+
+    // Try to reopen PTY slave to avoid affecting other processes
+    let mut tty_name = [0u8; 256];
+    let rc =
+      libc::ttyname_r(fd, tty_name.as_mut_ptr() as *mut c_char, tty_name.len());
+    if rc == 0 {
+      let open_mode = if access_mode == libc::O_RDONLY {
+        libc::O_RDONLY
+      } else if access_mode == libc::O_WRONLY {
+        libc::O_WRONLY
+      } else {
+        libc::O_RDWR
+      };
+      let new_fd = libc::open(
+        tty_name.as_ptr() as *const c_char,
+        open_mode | libc::O_NOCTTY,
+      );
+      if new_fd >= 0 {
+        // Successfully reopened - dup2 to replace original fd
+        if libc::dup2(new_fd, fd) < 0 {
+          libc::close(new_fd);
+          // Fall through, use original fd
+        } else {
+          libc::close(new_fd);
+          use_fd = fd;
+        }
+      } else if access_mode != libc::O_RDONLY {
+        // Can't reopen for writing, use blocking writes
+        blocking_writes = true;
+      }
+    }
+
+    // Set non-blocking unless using blocking writes
+    if !blocking_writes {
+      let current = libc::fcntl(use_fd, libc::F_GETFL);
+      libc::fcntl(use_fd, libc::F_SETFL, current | libc::O_NONBLOCK);
+    }
+
+    // Create AsyncFd for tokio reactor integration (dup to avoid double-close)
+    let dup_fd = libc::dup(use_fd);
+    if dup_fd < 0 {
+      return UV_EIO;
+    }
+    if !blocking_writes {
+      let current = libc::fcntl(dup_fd, libc::F_GETFL);
+      libc::fcntl(dup_fd, libc::F_SETFL, current | libc::O_NONBLOCK);
+    }
+    let owned = OwnedFd::from_raw_fd(dup_fd);
+    let async_fd = match tokio::io::unix::AsyncFd::new(owned) {
+      Ok(afd) => Some(afd),
+      Err(_) => {
+        // If registering with tokio fails (e.g. blocking writes), that's ok
+        if blocking_writes {
+          None
+        } else {
+          return UV_EIO;
+        }
+      }
+    };
+
+    // Save original termios
+    let mut orig_termios: libc::termios = std::mem::zeroed();
+    let termios_saved = if libc::tcgetattr(use_fd, &mut orig_termios) == 0 {
+      Some(orig_termios)
+    } else {
+      None
+    };
+
+    let mut handle_flags = UV_HANDLE_REF;
+    if blocking_writes {
+      handle_flags |= UV_HANDLE_BLOCKING_WRITES;
+    }
+    if access_mode != libc::O_WRONLY {
+      handle_flags |= UV_HANDLE_TTY_READABLE;
+    }
+
+    write(addr_of_mut!((*tty).r#type), uv_handle_type::UV_TTY);
+    write(addr_of_mut!((*tty).loop_), loop_);
+    write(addr_of_mut!((*tty).data), std::ptr::null_mut());
+    write(addr_of_mut!((*tty).flags), handle_flags);
+    write(addr_of_mut!((*tty).internal_mode), UV_TTY_MODE_NORMAL);
+    write(addr_of_mut!((*tty).internal_fd), use_fd);
+    write(addr_of_mut!((*tty).internal_orig_termios), termios_saved);
+    write(addr_of_mut!((*tty).internal_async_fd), async_fd);
+    write(addr_of_mut!((*tty).internal_alloc_cb), None);
+    write(addr_of_mut!((*tty).internal_read_cb), None);
+    write(addr_of_mut!((*tty).internal_reading), false);
+    write(addr_of_mut!((*tty).internal_write_queue), VecDeque::new());
+
+    let inner = get_inner(loop_);
+    inner.tty_handles.borrow_mut().push(tty);
+  }
+  0
+}
+
+/// ### Safety
+/// `loop_` must be initialized by `uv_loop_init`. `tty` must be a valid, writable pointer.
+/// `fd` must be a valid file descriptor. `readable` indicates whether the fd is readable.
+#[cfg(windows)]
+pub unsafe fn uv_tty_init(
+  loop_: *mut uv_loop_t,
+  tty: *mut uv_tty_t,
+  fd: c_int,
+  _readable: c_int,
+) -> c_int {
+  use std::ptr::addr_of_mut;
+  use std::ptr::write;
+
+  unsafe {
+    let os_handle = libc::get_osfhandle(fd);
+    if os_handle == -1 {
+      return UV_EBADF;
+    }
+
+    let mut handle: *mut c_void = std::ptr::null_mut();
+    let current_process =
+      windows_sys::Win32::System::Threading::GetCurrentProcess();
+    let ok = windows_sys::Win32::Foundation::DuplicateHandle(
+      current_process,
+      os_handle as isize,
+      current_process,
+      &mut handle as *mut _ as *mut isize,
+      0,
+      0,
+      windows_sys::Win32::Foundation::DUPLICATE_SAME_ACCESS,
+    );
+    if ok == 0 {
+      return UV_EIO;
+    }
+
+    // Determine if readable
+    let mut num_events: u32 = 0;
+    let is_readable =
+      windows_sys::Win32::System::Console::GetNumberOfConsoleInputEvents(
+        os_handle as isize,
+        &mut num_events,
+      ) != 0;
+
+    let mut handle_flags = UV_HANDLE_REF;
+    if is_readable {
+      handle_flags |= UV_HANDLE_TTY_READABLE;
+    }
+
+    write(addr_of_mut!((*tty).r#type), uv_handle_type::UV_TTY);
+    write(addr_of_mut!((*tty).loop_), loop_);
+    write(addr_of_mut!((*tty).data), std::ptr::null_mut());
+    write(addr_of_mut!((*tty).flags), handle_flags);
+    write(addr_of_mut!((*tty).internal_mode), UV_TTY_MODE_NORMAL);
+    write(addr_of_mut!((*tty).internal_handle), handle);
+    write(addr_of_mut!((*tty).internal_alloc_cb), None);
+    write(addr_of_mut!((*tty).internal_read_cb), None);
+    write(addr_of_mut!((*tty).internal_reading), false);
+    write(addr_of_mut!((*tty).internal_write_queue), VecDeque::new());
+
+    let inner = get_inner(loop_);
+    inner.tty_handles.borrow_mut().push(tty);
+  }
+  0
+}
+
+/// Set the TTY mode.
+///
+/// ### Safety
+/// `handle` must be a valid pointer to a `uv_tty_t` initialized by `uv_tty_init`.
+#[cfg(unix)]
+pub unsafe extern "C" fn uv_tty_set_mode(
+  handle: *mut uv_tty_t,
+  mode: c_int,
+) -> c_int {
+  unsafe {
+    let tty = &mut *handle;
+    if mode == tty.internal_mode {
+      return 0;
+    }
+
+    // When transitioning from normal to non-normal, save current termios
+    // for uv_tty_reset_mode
+    if tty.internal_mode == UV_TTY_MODE_NORMAL && mode != UV_TTY_MODE_NORMAL {
+      let mut current: libc::termios = std::mem::zeroed();
+      if libc::tcgetattr(tty.internal_fd, &mut current) == 0 {
+        tty.internal_orig_termios = Some(current);
+        // Save to global state for uv_tty_reset_mode (spinlock)
+        while TTY_RESET_LOCK
+          .compare_exchange_weak(
+            false,
+            true,
+            Ordering::Acquire,
+            Ordering::Relaxed,
+          )
+          .is_err()
+        {
+          std::hint::spin_loop();
+        }
+        TTY_RESET_FD = tty.internal_fd;
+        std::ptr::addr_of_mut!(TTY_RESET_TERMIOS)
+          .cast::<libc::termios>()
+          .write(current);
+        TTY_RESET_LOCK.store(false, Ordering::Release);
+      }
+    }
+
+    match mode {
+      UV_TTY_MODE_NORMAL => {
+        // Restore original termios
+        if let Some(ref orig) = tty.internal_orig_termios
+          && libc::tcsetattr(tty.internal_fd, libc::TCSADRAIN, orig) != 0
+        {
+          return UV_EIO;
+        }
+      }
+      UV_TTY_MODE_RAW => {
+        let mut raw: libc::termios = std::mem::zeroed();
+        if libc::tcgetattr(tty.internal_fd, &mut raw) != 0 {
+          return UV_EIO;
+        }
+        raw.c_iflag &= !(libc::BRKINT
+          | libc::ICRNL
+          | libc::INPCK
+          | libc::ISTRIP
+          | libc::IXON);
+        raw.c_oflag |= libc::ONLCR;
+        raw.c_cflag |= libc::CS8;
+        raw.c_lflag &= !(libc::ECHO | libc::ICANON | libc::IEXTEN | libc::ISIG);
+        raw.c_cc[libc::VMIN] = 1;
+        raw.c_cc[libc::VTIME] = 0;
+        if libc::tcsetattr(tty.internal_fd, libc::TCSADRAIN, &raw) != 0 {
+          return UV_EIO;
+        }
+      }
+      UV_TTY_MODE_IO => {
+        let mut raw: libc::termios = std::mem::zeroed();
+        if libc::tcgetattr(tty.internal_fd, &mut raw) != 0 {
+          return UV_EIO;
+        }
+        // cfmakeraw equivalent
+        raw.c_iflag &= !(libc::BRKINT
+          | libc::ICRNL
+          | libc::INPCK
+          | libc::ISTRIP
+          | libc::IXON
+          | libc::IMAXBEL
+          | libc::IGNBRK
+          | libc::IGNCR
+          | libc::INLCR
+          | libc::PARMRK);
+        raw.c_oflag &= !libc::OPOST;
+        raw.c_cflag &= !(libc::CSIZE | libc::PARENB);
+        raw.c_cflag |= libc::CS8;
+        raw.c_lflag &= !(libc::ECHO
+          | libc::ECHONL
+          | libc::ICANON
+          | libc::IEXTEN
+          | libc::ISIG);
+        raw.c_cc[libc::VMIN] = 1;
+        raw.c_cc[libc::VTIME] = 0;
+        if libc::tcsetattr(tty.internal_fd, libc::TCSADRAIN, &raw) != 0 {
+          return UV_EIO;
+        }
+      }
+      _ => return UV_EINVAL,
+    }
+
+    tty.internal_mode = mode;
+    0
+  }
+}
+
+/// Set the TTY mode.
+///
+/// ### Safety
+/// `handle` must be a valid pointer to a `uv_tty_t` initialized by `uv_tty_init`.
+#[cfg(windows)]
+pub unsafe extern "C" fn uv_tty_set_mode(
+  handle: *mut uv_tty_t,
+  mode: c_int,
+) -> c_int {
+  unsafe {
+    let tty = &mut *handle;
+    if mode == tty.internal_mode {
+      return 0;
+    }
+
+    let h = tty.internal_handle as isize;
+    let new_mode = match mode {
+      UV_TTY_MODE_NORMAL => {
+        windows_sys::Win32::System::Console::ENABLE_ECHO_INPUT
+          | windows_sys::Win32::System::Console::ENABLE_LINE_INPUT
+          | windows_sys::Win32::System::Console::ENABLE_PROCESSED_INPUT
+      }
+      UV_TTY_MODE_RAW | UV_TTY_MODE_IO => {
+        windows_sys::Win32::System::Console::ENABLE_WINDOW_INPUT
+      }
+      _ => return UV_EINVAL,
+    };
+
+    if tty.flags & UV_HANDLE_TTY_READABLE != 0 {
+      if windows_sys::Win32::System::Console::SetConsoleMode(h, new_mode) == 0 {
+        return UV_EIO;
+      }
+    }
+
+    tty.internal_mode = mode;
+    0
+  }
+}
+
+/// Get the current window size.
+///
+/// ### Safety
+/// `handle` must be a valid pointer to a `uv_tty_t`. `width` and `height` must be valid,
+/// writable pointers.
+#[cfg(unix)]
+pub unsafe extern "C" fn uv_tty_get_winsize(
+  handle: *mut uv_tty_t,
+  width: *mut c_int,
+  height: *mut c_int,
+) -> c_int {
+  unsafe {
+    let mut ws: libc::winsize = std::mem::zeroed();
+    if libc::ioctl((*handle).internal_fd, libc::TIOCGWINSZ, &mut ws) < 0 {
+      return UV_EIO;
+    }
+    *width = ws.ws_col as c_int;
+    *height = ws.ws_row as c_int;
+    0
+  }
+}
+
+/// Get the current window size.
+///
+/// ### Safety
+/// `handle` must be a valid pointer to a `uv_tty_t`. `width` and `height` must be valid,
+/// writable pointers.
+#[cfg(windows)]
+pub unsafe extern "C" fn uv_tty_get_winsize(
+  handle: *mut uv_tty_t,
+  width: *mut c_int,
+  height: *mut c_int,
+) -> c_int {
+  unsafe {
+    let mut csbi: windows_sys::Win32::System::Console::CONSOLE_SCREEN_BUFFER_INFO =
+      std::mem::zeroed();
+    let h = (*handle).internal_handle as isize;
+    if windows_sys::Win32::System::Console::GetConsoleScreenBufferInfo(
+      h, &mut csbi,
+    ) == 0
+    {
+      return UV_EIO;
+    }
+    *width = (csbi.srWindow.Right - csbi.srWindow.Left + 1) as c_int;
+    *height = (csbi.srWindow.Bottom - csbi.srWindow.Top + 1) as c_int;
+    0
+  }
+}
+
+/// Reset the console to normal mode. Async-signal-safe.
+///
+/// ### Safety
+/// This function accesses global state and should be called from signal handlers
+/// or at process exit.
+#[cfg(unix)]
+pub unsafe extern "C" fn uv_tty_reset_mode() -> c_int {
+  unsafe {
+    // Spinlock acquire
+    while TTY_RESET_LOCK
+      .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+      .is_err()
+    {
+      std::hint::spin_loop();
+    }
+
+    let fd = TTY_RESET_FD;
+    let status = if fd >= 0 {
+      let termios_ptr =
+        std::ptr::addr_of!(TTY_RESET_TERMIOS).cast::<libc::termios>();
+      if libc::tcsetattr(fd, libc::TCSANOW, termios_ptr) == 0 {
+        0
+      } else {
+        UV_EIO
+      }
+    } else {
+      0
+    };
+
+    TTY_RESET_LOCK.store(false, Ordering::Release);
+    status
+  }
+}
+
+/// Reset the console to normal mode.
+#[cfg(windows)]
+pub unsafe extern "C" fn uv_tty_reset_mode() -> c_int {
+  // On Windows this is typically handled by restoring the original console mode.
+  // Since we don't have a global saved mode in this implementation, this is a no-op.
+  0
+}
+
+/// Guess the handle type for a file descriptor.
+///
+/// ### Safety
+/// `fd` must be a valid file descriptor or -1.
+#[cfg(unix)]
+pub unsafe extern "C" fn uv_guess_handle(fd: c_int) -> uv_handle_type {
+  unsafe {
+    if fd < 0 {
+      return uv_handle_type::UV_UNKNOWN_HANDLE;
+    }
+
+    if libc::isatty(fd) != 0 {
+      return uv_handle_type::UV_TTY;
+    }
+
+    let mut s: libc::stat = std::mem::zeroed();
+    if libc::fstat(fd, &mut s) < 0 {
+      return uv_handle_type::UV_UNKNOWN_HANDLE;
+    }
+
+    let mode = s.st_mode & libc::S_IFMT;
+    if mode == libc::S_IFIFO {
+      return uv_handle_type::UV_NAMED_PIPE;
+    }
+    if mode == libc::S_IFSOCK {
+      return uv_handle_type::UV_TCP;
+    }
+    if mode == libc::S_IFREG {
+      return uv_handle_type::UV_FILE;
+    }
+
+    uv_handle_type::UV_UNKNOWN_HANDLE
+  }
+}
+
+/// Guess the handle type for a file descriptor.
+///
+/// ### Safety
+/// `fd` must be a valid file descriptor or -1.
+#[cfg(windows)]
+pub unsafe extern "C" fn uv_guess_handle(fd: c_int) -> uv_handle_type {
+  unsafe {
+    if fd < 0 {
+      return uv_handle_type::UV_UNKNOWN_HANDLE;
+    }
+
+    let os_handle = libc::get_osfhandle(fd);
+    if os_handle == -1 {
+      return uv_handle_type::UV_UNKNOWN_HANDLE;
+    }
+
+    let mut mode: u32 = 0;
+    if windows_sys::Win32::System::Console::GetConsoleMode(
+      os_handle as isize,
+      &mut mode,
+    ) != 0
+    {
+      return uv_handle_type::UV_TTY;
+    }
+
+    let file_type =
+      windows_sys::Win32::Storage::FileSystem::GetFileType(os_handle as isize);
+    if file_type == windows_sys::Win32::Storage::FileSystem::FILE_TYPE_PIPE {
+      return uv_handle_type::UV_NAMED_PIPE;
+    }
+    if file_type == windows_sys::Win32::Storage::FileSystem::FILE_TYPE_DISK {
+      return uv_handle_type::UV_FILE;
+    }
+
+    uv_handle_type::UV_UNKNOWN_HANDLE
+  }
+}
+
+pub fn new_tty() -> UvTty {
+  uv_tty_t {
+    r#type: uv_handle_type::UV_TTY,
+    loop_: std::ptr::null_mut(),
+    data: std::ptr::null_mut(),
+    flags: 0,
+    internal_mode: UV_TTY_MODE_NORMAL,
+    #[cfg(unix)]
+    internal_fd: -1,
+    #[cfg(unix)]
+    internal_orig_termios: None,
+    #[cfg(unix)]
+    internal_async_fd: None,
+    #[cfg(windows)]
+    internal_handle: std::ptr::null_mut(),
+    internal_alloc_cb: None,
+    internal_read_cb: None,
+    internal_reading: false,
+    internal_write_queue: VecDeque::new(),
+  }
 }
 
 pub fn new_tcp() -> UvTcp {
@@ -1958,5 +2847,661 @@ pub fn new_shutdown() -> UvShutdown {
     r#type: 0,
     data: std::ptr::null_mut(),
     handle: std::ptr::null_mut(),
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// Helper: create a loop, run a closure, close the loop.
+  unsafe fn with_loop(f: impl FnOnce(*mut uv_loop_t)) {
+    let mut uv_loop = std::mem::MaybeUninit::<uv_loop_t>::uninit();
+    let lp = uv_loop.as_mut_ptr();
+    // SAFETY: lp points to valid, writable memory.
+    unsafe {
+      uv_loop_init(lp);
+      f(lp);
+      uv_loop_close(lp);
+    }
+  }
+
+  /// Open a PTY pair and return (master_fd, slave_fd).
+  /// Returns None if openpty is not available (e.g. CI without a terminal).
+  #[cfg(unix)]
+  fn open_pty() -> Option<(c_int, c_int)> {
+    let mut master: c_int = -1;
+    let mut slave: c_int = -1;
+    // SAFETY: pointers are valid, nulls are allowed for name/termios/winsize.
+    let rc = unsafe {
+      libc::openpty(
+        &mut master,
+        &mut slave,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+      )
+    };
+    if rc == 0 { Some((master, slave)) } else { None }
+  }
+
+  #[test]
+  fn test_new_tty_defaults() {
+    let tty = new_tty();
+    assert_eq!(tty.r#type, uv_handle_type::UV_TTY);
+    assert!(tty.loop_.is_null());
+    assert_eq!(tty.internal_mode, UV_TTY_MODE_NORMAL);
+    assert!(!tty.internal_reading);
+    assert!(tty.internal_write_queue.is_empty());
+  }
+
+  #[test]
+  fn test_tty_init_non_tty_fd_fails() {
+    // A pipe fd is not a TTY, so uv_tty_init should fail with UV_EINVAL.
+    #[cfg(unix)]
+    unsafe {
+      let mut fds = [0 as c_int; 2];
+      assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+
+      // Need a tokio runtime for AsyncFd
+      let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+      let _guard = rt.enter();
+
+      with_loop(|lp| {
+        let mut tty = new_tty();
+        let rc = uv_tty_init(lp, &mut tty, fds[0], 1);
+        assert_eq!(rc, UV_EINVAL, "pipe fd should not be a TTY");
+      });
+
+      libc::close(fds[0]);
+      libc::close(fds[1]);
+    }
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn test_tty_init_with_pty() {
+    let Some((master, slave)) = open_pty() else {
+      return;
+    };
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+      .enable_all()
+      .build()
+      .unwrap();
+    let _guard = rt.enter();
+
+    unsafe {
+      with_loop(|lp| {
+        let mut tty = new_tty();
+        let rc = uv_tty_init(lp, &mut tty, slave, 1);
+        assert_eq!(rc, 0, "uv_tty_init should succeed on PTY slave");
+        assert_eq!(tty.r#type, uv_handle_type::UV_TTY);
+        assert_eq!(tty.internal_fd, slave);
+        assert!(tty.internal_orig_termios.is_some());
+
+        // Clean up
+        uv_close(&mut tty as *mut uv_tty_t as *mut uv_handle_t, None);
+        let inner = get_inner(lp);
+        inner.run_close();
+      });
+
+      libc::close(master);
+      libc::close(slave);
+    }
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn test_tty_get_winsize_with_pty() {
+    let Some((master, slave)) = open_pty() else {
+      return;
+    };
+
+    // Set a known window size on the master
+    unsafe {
+      let ws = libc::winsize {
+        ws_row: 25,
+        ws_col: 80,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+      };
+      libc::ioctl(master, libc::TIOCSWINSZ, &ws);
+    }
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+      .enable_all()
+      .build()
+      .unwrap();
+    let _guard = rt.enter();
+
+    unsafe {
+      with_loop(|lp| {
+        let mut tty = new_tty();
+        let rc = uv_tty_init(lp, &mut tty, slave, 0);
+        assert_eq!(rc, 0);
+
+        let mut width: c_int = 0;
+        let mut height: c_int = 0;
+        let rc = uv_tty_get_winsize(&mut tty, &mut width, &mut height);
+        assert_eq!(rc, 0);
+        assert_eq!(width, 80);
+        assert_eq!(height, 25);
+
+        uv_close(&mut tty as *mut uv_tty_t as *mut uv_handle_t, None);
+        let inner = get_inner(lp);
+        inner.run_close();
+      });
+
+      libc::close(master);
+      libc::close(slave);
+    }
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn test_tty_set_mode_raw_and_normal() {
+    let Some((master, slave)) = open_pty() else {
+      return;
+    };
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+      .enable_all()
+      .build()
+      .unwrap();
+    let _guard = rt.enter();
+
+    unsafe {
+      with_loop(|lp| {
+        let mut tty = new_tty();
+        let rc = uv_tty_init(lp, &mut tty, slave, 1);
+        assert_eq!(rc, 0);
+
+        // Switch to raw mode
+        let rc = uv_tty_set_mode(&mut tty, UV_TTY_MODE_RAW);
+        assert_eq!(rc, 0);
+        assert_eq!(tty.internal_mode, UV_TTY_MODE_RAW);
+
+        // Verify termios is actually in raw mode
+        let mut t: libc::termios = std::mem::zeroed();
+        libc::tcgetattr(slave, &mut t);
+        assert_eq!(
+          t.c_lflag & libc::ICANON,
+          0,
+          "ICANON should be off in raw mode"
+        );
+        assert_eq!(t.c_lflag & libc::ECHO, 0, "ECHO should be off in raw mode");
+
+        // Switch back to normal
+        let rc = uv_tty_set_mode(&mut tty, UV_TTY_MODE_NORMAL);
+        assert_eq!(rc, 0);
+        assert_eq!(tty.internal_mode, UV_TTY_MODE_NORMAL);
+
+        // Setting same mode again is a no-op
+        let rc = uv_tty_set_mode(&mut tty, UV_TTY_MODE_NORMAL);
+        assert_eq!(rc, 0);
+
+        uv_close(&mut tty as *mut uv_tty_t as *mut uv_handle_t, None);
+        let inner = get_inner(lp);
+        inner.run_close();
+      });
+
+      libc::close(master);
+      libc::close(slave);
+    }
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn test_tty_set_mode_io() {
+    let Some((master, slave)) = open_pty() else {
+      return;
+    };
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+      .enable_all()
+      .build()
+      .unwrap();
+    let _guard = rt.enter();
+
+    unsafe {
+      with_loop(|lp| {
+        let mut tty = new_tty();
+        let rc = uv_tty_init(lp, &mut tty, slave, 1);
+        assert_eq!(rc, 0);
+
+        let rc = uv_tty_set_mode(&mut tty, UV_TTY_MODE_IO);
+        assert_eq!(rc, 0);
+        assert_eq!(tty.internal_mode, UV_TTY_MODE_IO);
+
+        // Verify cfmakeraw-like settings
+        let mut t: libc::termios = std::mem::zeroed();
+        libc::tcgetattr(slave, &mut t);
+        assert_eq!(
+          t.c_oflag & libc::OPOST,
+          0,
+          "OPOST should be off in IO mode"
+        );
+        assert_eq!(
+          t.c_lflag & libc::ICANON,
+          0,
+          "ICANON should be off in IO mode"
+        );
+
+        // Back to normal
+        let rc = uv_tty_set_mode(&mut tty, UV_TTY_MODE_NORMAL);
+        assert_eq!(rc, 0);
+
+        uv_close(&mut tty as *mut uv_tty_t as *mut uv_handle_t, None);
+        let inner = get_inner(lp);
+        inner.run_close();
+      });
+
+      libc::close(master);
+      libc::close(slave);
+    }
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn test_tty_set_mode_invalid() {
+    let Some((master, slave)) = open_pty() else {
+      return;
+    };
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+      .enable_all()
+      .build()
+      .unwrap();
+    let _guard = rt.enter();
+
+    unsafe {
+      with_loop(|lp| {
+        let mut tty = new_tty();
+        let rc = uv_tty_init(lp, &mut tty, slave, 1);
+        assert_eq!(rc, 0);
+
+        let rc = uv_tty_set_mode(&mut tty, 99);
+        assert_eq!(rc, UV_EINVAL);
+
+        uv_close(&mut tty as *mut uv_tty_t as *mut uv_handle_t, None);
+        let inner = get_inner(lp);
+        inner.run_close();
+      });
+
+      libc::close(master);
+      libc::close(slave);
+    }
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn test_tty_write_and_read() {
+    let Some((master, slave)) = open_pty() else {
+      return;
+    };
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+      .enable_all()
+      .build()
+      .unwrap();
+
+    rt.block_on(async {
+      unsafe {
+        with_loop(|lp| {
+          let inner = get_inner(lp);
+          inner.set_waker(&futures::task::noop_waker());
+
+          // --- Write side: init a TTY on master, write data ---
+          let mut write_tty = new_tty();
+          let rc = uv_tty_init(lp, &mut write_tty, master, 0);
+          assert_eq!(rc, 0);
+
+          let test_data = b"hello tty\n";
+          let rc = uv_try_write(
+            &mut write_tty as *mut uv_tty_t as *mut uv_stream_t,
+            test_data,
+          );
+          // Should write some or all bytes (blocking writes on master PTY)
+          assert!(rc > 0, "uv_try_write should succeed, got {rc}");
+
+          // --- Read side: read from slave using libc::read ---
+          // The PTY transforms the data, so just verify we get something
+          let mut read_buf = [0u8; 256];
+          // Set slave non-blocking for the read
+          let fl = libc::fcntl(slave, libc::F_GETFL);
+          libc::fcntl(slave, libc::F_SETFL, fl | libc::O_NONBLOCK);
+          let n = libc::read(
+            slave,
+            read_buf.as_mut_ptr() as *mut c_void,
+            read_buf.len(),
+          );
+          assert!(n > 0, "should read data from PTY slave, got {n}");
+
+          uv_close(&mut write_tty as *mut uv_tty_t as *mut uv_handle_t, None);
+          inner.run_close();
+        });
+
+        libc::close(master);
+        libc::close(slave);
+      }
+    });
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn test_tty_queued_write_drains_in_run_io() {
+    let Some((master, slave)) = open_pty() else {
+      return;
+    };
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+      .enable_all()
+      .build()
+      .unwrap();
+
+    rt.block_on(async {
+      unsafe {
+        with_loop(|lp| {
+          let inner = get_inner(lp);
+          inner.set_waker(&futures::task::noop_waker());
+
+          let mut tty = new_tty();
+          let rc = uv_tty_init(lp, &mut tty, master, 0);
+          assert_eq!(rc, 0);
+
+          // Force blocking writes so run_io drains synchronously
+          // (async path needs reactor ticks which aren't available
+          // in a synchronous test)
+          tty.flags |= UV_HANDLE_BLOCKING_WRITES;
+
+          // Queue a write via uv_write
+          static mut WRITE_CB_CALLED: bool = false;
+          unsafe extern "C" fn write_cb(_req: *mut uv_write_t, status: i32) {
+            assert_eq!(status, 0);
+            // SAFETY: test-only global, single-threaded.
+            unsafe {
+              WRITE_CB_CALLED = true;
+            }
+          }
+
+          let mut req = new_write();
+          let data = b"queued write\n";
+          let buf = uv_buf_t {
+            base: data.as_ptr() as *mut c_char,
+            len: data.len(),
+          };
+          let rc = uv_write(
+            &mut req,
+            &mut tty as *mut uv_tty_t as *mut uv_stream_t,
+            &buf,
+            1,
+            Some(write_cb),
+          );
+          assert_eq!(rc, 0);
+          assert!(!tty.internal_write_queue.is_empty());
+
+          // Drain the write queue
+          inner.run_io();
+          assert!(WRITE_CB_CALLED, "write callback should have fired");
+
+          uv_close(&mut tty as *mut uv_tty_t as *mut uv_handle_t, None);
+          inner.run_close();
+        });
+
+        libc::close(master);
+        libc::close(slave);
+      }
+    });
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn test_tty_close_callback() {
+    let Some((master, slave)) = open_pty() else {
+      return;
+    };
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+      .enable_all()
+      .build()
+      .unwrap();
+    let _guard = rt.enter();
+
+    unsafe {
+      with_loop(|lp| {
+        let inner = get_inner(lp);
+
+        let mut tty = new_tty();
+        let rc = uv_tty_init(lp, &mut tty, slave, 1);
+        assert_eq!(rc, 0);
+
+        static mut CLOSE_CB_CALLED: bool = false;
+        unsafe extern "C" fn close_cb(_handle: *mut uv_handle_t) {
+          // SAFETY: test-only global, single-threaded.
+          unsafe {
+            CLOSE_CB_CALLED = true;
+          }
+        }
+
+        uv_close(
+          &mut tty as *mut uv_tty_t as *mut uv_handle_t,
+          Some(close_cb),
+        );
+
+        // Close callback fires on next run_close
+        inner.run_close();
+        assert!(CLOSE_CB_CALLED, "close callback should have fired");
+
+        // Handle should no longer be in tty_handles
+        assert!(inner.tty_handles.borrow().is_empty());
+      });
+
+      libc::close(master);
+      libc::close(slave);
+    }
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn test_tty_read_start_stop() {
+    let Some((master, slave)) = open_pty() else {
+      return;
+    };
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+      .enable_all()
+      .build()
+      .unwrap();
+    let _guard = rt.enter();
+
+    unsafe {
+      with_loop(|lp| {
+        let inner = get_inner(lp);
+
+        let mut tty = new_tty();
+        let rc = uv_tty_init(lp, &mut tty, slave, 1);
+        assert_eq!(rc, 0);
+
+        unsafe extern "C" fn alloc_cb(
+          _handle: *mut uv_handle_t,
+          _suggested_size: usize,
+          _buf: *mut uv_buf_t,
+        ) {
+        }
+        unsafe extern "C" fn read_cb(
+          _stream: *mut uv_stream_t,
+          _nread: isize,
+          _buf: *const uv_buf_t,
+        ) {
+        }
+
+        let stream = &mut tty as *mut uv_tty_t as *mut uv_stream_t;
+        let rc = uv_read_start(stream, Some(alloc_cb), Some(read_cb));
+        assert_eq!(rc, 0);
+        assert!(tty.internal_reading);
+        assert!(tty.flags & UV_HANDLE_ACTIVE != 0);
+
+        let rc = uv_read_stop(stream);
+        assert_eq!(rc, 0);
+        assert!(!tty.internal_reading);
+
+        uv_close(&mut tty as *mut uv_tty_t as *mut uv_handle_t, None);
+        inner.run_close();
+      });
+
+      libc::close(master);
+      libc::close(slave);
+    }
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn test_guess_handle() {
+    unsafe {
+      // Pipe should be detected as NAMED_PIPE
+      let mut fds = [0 as c_int; 2];
+      assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+      assert_eq!(uv_guess_handle(fds[0]), uv_handle_type::UV_NAMED_PIPE);
+      assert_eq!(uv_guess_handle(fds[1]), uv_handle_type::UV_NAMED_PIPE);
+      libc::close(fds[0]);
+      libc::close(fds[1]);
+
+      // Invalid fd
+      assert_eq!(uv_guess_handle(-1), uv_handle_type::UV_UNKNOWN_HANDLE);
+
+      // PTY should be detected as TTY
+      if let Some((master, slave)) = open_pty() {
+        assert_eq!(uv_guess_handle(master), uv_handle_type::UV_TTY);
+        assert_eq!(uv_guess_handle(slave), uv_handle_type::UV_TTY);
+        libc::close(master);
+        libc::close(slave);
+      }
+    }
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn test_tty_reset_mode() {
+    let Some((master, slave)) = open_pty() else {
+      return;
+    };
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+      .enable_all()
+      .build()
+      .unwrap();
+    let _guard = rt.enter();
+
+    unsafe {
+      with_loop(|lp| {
+        let mut tty = new_tty();
+        let rc = uv_tty_init(lp, &mut tty, slave, 1);
+        assert_eq!(rc, 0);
+
+        // Save original termios for comparison
+        let mut orig: libc::termios = std::mem::zeroed();
+        libc::tcgetattr(slave, &mut orig);
+        let orig_lflag = orig.c_lflag;
+
+        // Switch to raw
+        let rc = uv_tty_set_mode(&mut tty, UV_TTY_MODE_RAW);
+        assert_eq!(rc, 0);
+
+        // Verify it changed
+        let mut current: libc::termios = std::mem::zeroed();
+        libc::tcgetattr(slave, &mut current);
+        assert_ne!(current.c_lflag & libc::ICANON, orig_lflag & libc::ICANON);
+
+        // Manually set global state under the spinlock to ensure
+        // it points to our fd (other parallel tests may overwrite it)
+        while TTY_RESET_LOCK
+          .compare_exchange_weak(
+            false,
+            true,
+            Ordering::Acquire,
+            Ordering::Relaxed,
+          )
+          .is_err()
+        {
+          std::hint::spin_loop();
+        }
+        TTY_RESET_FD = tty.internal_fd;
+        std::ptr::addr_of_mut!(TTY_RESET_TERMIOS)
+          .cast::<libc::termios>()
+          .write(orig);
+        TTY_RESET_LOCK.store(false, Ordering::Release);
+
+        // Global reset
+        let rc = uv_tty_reset_mode();
+        assert_eq!(rc, 0);
+
+        // Verify restored
+        let mut restored: libc::termios = std::mem::zeroed();
+        libc::tcgetattr(tty.internal_fd, &mut restored);
+        assert_eq!(
+          restored.c_lflag & libc::ICANON,
+          orig_lflag & libc::ICANON,
+          "ICANON should be restored after reset_mode"
+        );
+
+        uv_close(&mut tty as *mut uv_tty_t as *mut uv_handle_t, None);
+        let inner = get_inner(lp);
+        inner.run_close();
+      });
+
+      libc::close(master);
+      libc::close(slave);
+    }
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn test_tty_has_alive_handles() {
+    let Some((master, slave)) = open_pty() else {
+      return;
+    };
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+      .enable_all()
+      .build()
+      .unwrap();
+    let _guard = rt.enter();
+
+    unsafe {
+      with_loop(|lp| {
+        let inner = get_inner(lp);
+        assert!(!inner.has_alive_handles());
+
+        let mut tty = new_tty();
+        let rc = uv_tty_init(lp, &mut tty, slave, 1);
+        assert_eq!(rc, 0);
+
+        // TTY is ref'd but not active yet
+        assert!(!inner.has_alive_handles());
+
+        // Make it active
+        tty.flags |= UV_HANDLE_ACTIVE;
+        assert!(inner.has_alive_handles());
+
+        // Unref it
+        uv_unref(&mut tty as *mut uv_tty_t as *mut uv_handle_t);
+        assert!(!inner.has_alive_handles());
+
+        // Re-ref
+        uv_ref(&mut tty as *mut uv_tty_t as *mut uv_handle_t);
+        assert!(inner.has_alive_handles());
+
+        uv_close(&mut tty as *mut uv_tty_t as *mut uv_handle_t, None);
+        inner.run_close();
+        assert!(!inner.has_alive_handles());
+      });
+
+      libc::close(master);
+      libc::close(slave);
+    }
   }
 }
