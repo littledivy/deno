@@ -222,7 +222,7 @@ unsafe extern "C" fn h2_read_cb(
     unsafe {
       deno_core::uv_compat::uv_read_stop(handle);
     }
-    // Notify nghttp2 about the EOF by terminating the session.
+    // SAFETY: Notify nghttp2 about the EOF by terminating the session.
     // This causes on_stream_close_callback to fire for all open
     // streams, triggering the JS-side close/aborted event flow.
     unsafe {

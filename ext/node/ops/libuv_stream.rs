@@ -3,7 +3,6 @@
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::ffi::c_void;
-use std::net::SocketAddr;
 use std::net::ToSocketAddrs;
 use std::ptr;
 
@@ -393,7 +392,7 @@ impl TCP {
       uv_compat::uv_tcp_bind(
         tcp,
         sock_addr.as_ptr() as *const _,
-        sock_addr.len() as u32,
+        sock_addr.len(),
         0,
       )
     }
@@ -420,7 +419,7 @@ impl TCP {
       uv_compat::uv_tcp_bind(
         tcp,
         sock_addr.as_ptr() as *const _,
-        sock_addr.len() as u32,
+        sock_addr.len(),
         0,
       )
     }
@@ -698,13 +697,11 @@ fn sockaddr_from_socket2(
       port: addr.port(),
       family: "IPv4".to_string(),
     })
-  } else if let Some(addr) = sock_addr.as_socket_ipv6() {
-    Some(SockAddrInfo {
+  } else {
+    sock_addr.as_socket_ipv6().map(|addr| SockAddrInfo {
       address: addr.ip().to_string(),
       port: addr.port(),
       family: "IPv6".to_string(),
     })
-  } else {
-    None
   }
 }
