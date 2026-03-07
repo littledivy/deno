@@ -165,19 +165,33 @@ where
   })
 }
 
+/// A batched write request that holds all pending data to be written.
+/// This structure owns the data and keeps it alive until the write completes.
 #[repr(C)]
-struct H2WriteReq {
+pub struct H2WriteReq {
   uv_req: deno_core::uv_compat::UvWrite,
+  /// All the data chunks to be written, concatenated into a single buffer.
   data: Vec<u8>,
+  /// Pointer back to the session so the callback can process queued data.
+  session: *mut Session,
 }
 
 unsafe extern "C" fn h2_write_cb(
   req: *mut deno_core::uv_compat::UvWrite,
   _status: i32,
 ) {
-  // Free the write request
   // SAFETY: req was created by Box::into_raw in send_pending_data
-  let _ = unsafe { Box::from_raw(req as *mut H2WriteReq) };
+  let write_req = unsafe { Box::from_raw(req as *mut H2WriteReq) };
+  let session = unsafe { &mut *write_req.session };
+
+  // Mark write as complete
+  session.write_in_progress = false;
+
+  // If there's queued data, write it now
+  if !session.queued_data.is_empty() {
+    let data = std::mem::take(&mut session.queued_data);
+    session.do_write(data);
+  }
 }
 
 unsafe extern "C" fn h2_stream_close_cb(
@@ -1325,6 +1339,12 @@ pub struct Session {
   /// handle close is deferred until send_pending_data can run, allowing
   /// GOAWAY to be sent before the connection closes.
   pub pending_destroy: bool,
+  /// True when a uv_write is in flight. We serialize writes to avoid
+  /// callback ordering issues that cause double-free.
+  pub write_in_progress: bool,
+  /// Data queued while a write was in progress. Will be written when
+  /// the current write completes.
+  pub queued_data: Vec<u8>,
 }
 
 impl Session {
@@ -1363,6 +1383,48 @@ impl Session {
     unsafe { &mut *(user_data as *mut Session) }
   }
 
+  /// Internal: actually perform a write to the underlying stream.
+  /// Caller must ensure write_in_progress is false before calling.
+  fn do_write(&mut self, data: Vec<u8>) {
+    let stream = match self.stream {
+      Some(stream) => stream,
+      None => return,
+    };
+
+    if data.is_empty() {
+      return;
+    }
+
+    self.write_in_progress = true;
+
+    let write_req = Box::new(H2WriteReq {
+      uv_req: deno_core::uv_compat::new_write(),
+      data,
+      session: self as *mut Session,
+    });
+    let write_ptr = Box::into_raw(write_req);
+
+    // SAFETY: write_ptr is freshly allocated; stream is a valid libuv handle
+    unsafe {
+      let buf = deno_core::uv_compat::UvBuf {
+        base: (*write_ptr).data.as_ptr() as *mut _,
+        len: (*write_ptr).data.len(),
+      };
+      let ret = deno_core::uv_compat::uv_write(
+        &mut (*write_ptr).uv_req,
+        stream,
+        &buf,
+        1,
+        Some(h2_write_cb),
+      );
+      if ret != 0 {
+        // Write failed immediately, free the request
+        self.write_in_progress = false;
+        let _ = Box::from_raw(write_ptr);
+      }
+    }
+  }
+
   pub fn send_pending_data(&mut self) {
     // Prevent recursive calls. JS callbacks from nghttp2_session_mem_recv
     // can call back into send_pending_data via scheduleSendPending. Nested
@@ -1372,21 +1434,28 @@ impl Session {
     if self.is_sending {
       return;
     }
-    let stream = match self.stream {
-      Some(stream) => stream,
-      None => return,
-    };
+
+    if self.stream.is_none() {
+      return;
+    }
 
     // Safety check: ensure the stream handle is still a valid TCP handle
     let handle_type =
       // SAFETY: stream pointer is valid, stored in self.stream by consume_stream
-      unsafe { (*(stream as *mut deno_core::uv_compat::UvHandle)).r#type };
+      unsafe {
+        (*(self.stream.unwrap() as *mut deno_core::uv_compat::UvHandle)).r#type
+      };
     if handle_type != deno_core::uv_compat::uv_handle_type::UV_TCP {
       self.stream = None;
       return;
     }
 
     self.is_sending = true;
+
+    // Part 1: Gather all data from nghttp2 into a single buffer.
+    // This matches Node.js behavior which batches all pending data before writing.
+    let mut combined_data: Vec<u8> = Vec::new();
+
     loop {
       let mut src = std::ptr::null();
       let src_len =
@@ -1396,61 +1465,33 @@ impl Session {
       if src_len > 0 {
         // SAFETY: src and src_len are valid per nghttp2_session_mem_send contract
         let data = unsafe { std::slice::from_raw_parts(src, src_len as usize) };
-        // Write to libuv stream
-        let data_copy = data.to_vec();
-        let write_req = Box::new(H2WriteReq {
-          uv_req: deno_core::uv_compat::new_write(),
-          data: data_copy,
-        });
-        let write_ptr = Box::into_raw(write_req);
-        // SAFETY: write_ptr is freshly allocated; stream is a valid libuv handle
-        unsafe {
-          let buf = deno_core::uv_compat::UvBuf {
-            base: (*write_ptr).data.as_ptr() as *mut _,
-            len: (*write_ptr).data.len(),
-          };
-          let ret = deno_core::uv_compat::uv_write(
-            &mut (*write_ptr).uv_req,
-            stream,
-            &buf,
-            1,
-            Some(h2_write_cb),
-          );
-          if ret != 0 {
-            let _ = Box::from_raw(write_ptr);
-          }
-        }
+        combined_data.extend_from_slice(data);
       } else {
         break;
       }
     }
-    self.is_sending = false;
 
+    // Also gather any outgoing buffers (DATA frame payloads)
     if !self.outgoing_buffers.is_empty() {
       for buffer in &self.outgoing_buffers {
-        let data = buffer.data.as_ref();
-        let data_copy = data.to_vec();
-        let write_req = Box::new(H2WriteReq {
-          uv_req: deno_core::uv_compat::new_write(),
-          data: data_copy,
-        });
-        let write_ptr = Box::into_raw(write_req);
-        // SAFETY: write_ptr is freshly allocated; stream is a valid libuv handle
-        unsafe {
-          let buf = deno_core::uv_compat::UvBuf {
-            base: (*write_ptr).data.as_ptr() as *mut _,
-            len: (*write_ptr).data.len(),
-          };
-          deno_core::uv_compat::uv_write(
-            &mut (*write_ptr).uv_req,
-            stream,
-            &buf,
-            1,
-            Some(h2_write_cb),
-          );
-        }
+        combined_data.extend_from_slice(buffer.data.as_ref());
       }
       self.clear_outgoing();
+    }
+
+    self.is_sending = false;
+
+    // Part 2: Either write now or queue for later.
+    // We serialize writes to avoid callback ordering issues.
+    if !combined_data.is_empty() {
+      if self.write_in_progress {
+        // A write is already in flight. Queue this data to be written
+        // when the current write completes.
+        self.queued_data.extend(combined_data);
+      } else {
+        // No write in progress, write now.
+        self.do_write(combined_data);
+      }
     }
   }
 
@@ -1577,6 +1618,8 @@ impl Http2Session {
       stream: None,
       is_sending: false,
       pending_destroy: false,
+      write_in_progress: false,
+      queued_data: Vec::new(),
     }));
 
     // SAFETY: inner is valid (just allocated); callbacks and options are valid
