@@ -55,6 +55,9 @@ pub fn get_extensions_in_snapshot() -> Vec<Extension> {
       Arc::new(|_| unreachable!("not used in snapshot.")),
       None,
     ),
+    ops::isolate_host::deno_isolate_host::init(Arc::new(|_| {
+      unreachable!("not used in snapshot.")
+    })),
     ops::fs_events::deno_fs_events::init(),
     ops::permissions::deno_permissions::init(),
     ops::tty::deno_tty::init(),

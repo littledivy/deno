@@ -25,6 +25,7 @@ import * as fs from "ext:deno_fs/30_fs.js";
 import * as os from "ext:deno_os/30_os.js";
 import * as fsEvents from "ext:runtime/40_fs_events.js";
 import * as process from "ext:deno_process/40_process.js";
+import * as isolate from "ext:runtime/42_isolate.js";
 import * as signals from "ext:deno_os/40_signals.js";
 import * as tty from "ext:runtime/40_tty.js";
 import * as kv from "ext:deno_kv/01_db.ts";
@@ -44,8 +45,8 @@ const loadWebTransport = core.createLazyLoader("ext:deno_web/webtransport.js");
 const usageBuffer = new Float64Array(4);
 
 const denoNs = {
-  Process: process.Process,
-  run: process.run,
+  run: isolate.run,
+  DenoIsolate: isolate.DenoIsolate,
   isatty: tty.isatty,
   writeFileSync: fs.writeFileSync,
   writeFile: fs.writeFile,

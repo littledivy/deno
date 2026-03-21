@@ -54,6 +54,7 @@ pub fn create_runtime_snapshot(
     >(),
     ops::runtime::deno_runtime::lazy_init(),
     ops::worker_host::deno_worker_host::lazy_init(),
+    ops::isolate_host::deno_isolate_host::lazy_init(),
     ops::fs_events::deno_fs_events::lazy_init(),
     ops::permissions::deno_permissions::lazy_init(),
     ops::tty::deno_tty::lazy_init(),

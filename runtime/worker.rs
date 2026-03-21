@@ -242,6 +242,9 @@ pub struct WorkerOptions {
   pub create_web_worker_cb: Arc<ops::worker_host::CreateWebWorkerCb>,
   pub format_js_error_fn: Option<Arc<FormatJsErrorFn>>,
 
+  // Callback invoked when creating a new lightweight isolate via Deno.run()
+  pub create_isolate_runtime_cb: Arc<ops::isolate_host::CreateIsolateRuntimeCb>,
+
   // If true, the worker will wait for inspector session and break on first
   // statement of user code. Takes higher precedence than
   // `should_wait_for_inspector_session`.
@@ -266,6 +269,9 @@ impl Default for WorkerOptions {
     Self {
       create_web_worker_cb: Arc::new(|_| {
         unimplemented!("web workers are not supported")
+      }),
+      create_isolate_runtime_cb: Arc::new(|_| {
+        unimplemented!("isolates are not supported")
       }),
       skip_op_registration: false,
       seed: None,
@@ -584,6 +590,9 @@ impl MainWorker {
         ops::worker_host::deno_worker_host::args(
           options.create_web_worker_cb.clone(),
           options.format_js_error_fn.clone(),
+        ),
+        ops::isolate_host::deno_isolate_host::args(
+          options.create_isolate_runtime_cb.clone(),
         ),
         deno_bundle_runtime::deno_bundle_runtime::args(
           services.bundle_provider.clone(),
@@ -1116,6 +1125,7 @@ fn common_extensions<
     // Ops from this crate
     ops::runtime::deno_runtime::lazy_init(),
     ops::worker_host::deno_worker_host::lazy_init(),
+    ops::isolate_host::deno_isolate_host::lazy_init(),
     ops::fs_events::deno_fs_events::init(),
     ops::permissions::deno_permissions::init(),
     ops::tty::deno_tty::init(),
@@ -1190,6 +1200,23 @@ fn common_runtime(opts: CommonRuntimeOptions) -> JsRuntime {
     .put(EnableRawImports(enable_raw_imports));
 
   js_runtime
+}
+
+/// Create the common set of extensions for a lightweight isolate.
+/// This is a subset of what `common_extensions` provides — all extensions
+/// are included (via snapshot) but only initialized lazily.
+/// The `deno_isolate_host` extension is NOT included here; callers must
+/// add it separately if nesting is allowed.
+pub fn common_extensions_for_isolate() -> Vec<Extension> {
+  use deno_resolver::npm::DenoInNpmPackageChecker;
+  use deno_resolver::npm::NpmResolver;
+
+  // Use the same ordering as common_extensions, all lazy/snapshot-backed.
+  common_extensions::<
+    DenoInNpmPackageChecker,
+    NpmResolver<sys_traits::impls::RealSys>,
+    sys_traits::impls::RealSys,
+  >(true, false)
 }
 
 pub fn create_permissions_stack_trace_callback()

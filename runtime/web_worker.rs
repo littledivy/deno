@@ -394,6 +394,7 @@ pub struct WebWorkerOptions {
   pub create_params: Option<v8::CreateParams>,
   pub seed: Option<u64>,
   pub create_web_worker_cb: Arc<ops::worker_host::CreateWebWorkerCb>,
+  pub create_isolate_runtime_cb: Arc<ops::isolate_host::CreateIsolateRuntimeCb>,
   pub format_js_error_fn: Option<Arc<FormatJsErrorFn>>,
   pub worker_type: WorkerThreadType,
   pub cache_storage_dir: Option<std::path::PathBuf>,
@@ -586,6 +587,9 @@ impl WebWorker {
       ops::worker_host::deno_worker_host::init(
         options.create_web_worker_cb,
         options.format_js_error_fn,
+      ),
+      ops::isolate_host::deno_isolate_host::init(
+        options.create_isolate_runtime_cb,
       ),
       ops::fs_events::deno_fs_events::init(),
       ops::permissions::deno_permissions::init(),

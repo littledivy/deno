@@ -43,6 +43,7 @@ use deno_runtime::deno_tls::RootCertStoreProvider;
 use deno_runtime::deno_web::BlobStore;
 use deno_runtime::deno_web::InMemoryBroadcastChannel;
 use deno_runtime::fmt_errors::format_js_error;
+use deno_runtime::ops::isolate_host::CreateIsolateRuntimeCb;
 use deno_runtime::ops::worker_host::CreateWebWorkerCb;
 use deno_runtime::web_worker::WebWorker;
 use deno_runtime::web_worker::WebWorkerOptions;
@@ -469,6 +470,7 @@ impl<TSys: DenoLibSys> LibWorkerFactorySharedState<TSys> {
           .clone(),
         seed: shared.options.seed,
         create_web_worker_cb,
+        create_isolate_runtime_cb: shared.create_isolate_runtime_callback(),
         format_js_error_fn: Some(Arc::new(move |a| {
           format_js_error(a, maybe_initial_cwd.as_ref())
         })),
@@ -515,6 +517,223 @@ impl<TSys: DenoLibSys> LibWorkerFactorySharedState<TSys> {
       }
 
       (worker, handle)
+    })
+  }
+
+  fn create_isolate_runtime_callback(
+    self: &Arc<Self>,
+  ) -> Arc<CreateIsolateRuntimeCb> {
+    use deno_runtime::ops::isolate_host::CreateIsolateRuntimeArgs;
+    use deno_runtime::ops::isolate_host::FilteredModuleLoader;
+
+    let shared = self.clone();
+    Arc::new(move |args: CreateIsolateRuntimeArgs| {
+      let create_params = {
+        let mut params =
+          create_isolate_create_params(&shared.sys).unwrap_or_default();
+        if let Some(ref limits) = args.resource_limits {
+          if let Some(mem_mb) = limits.memory_limit_mb.filter(|&v| v > 0) {
+            params =
+              params.set_max_old_generation_size_in_bytes(mem_mb * 1024 * 1024);
+          }
+        }
+        params
+      };
+
+      let CreateModuleLoaderResult {
+        module_loader,
+        node_require_loader: _,
+      } = shared.module_loader_factory.create_for_worker(
+        args.parent_permissions.clone(),
+        args.permissions.clone(),
+      );
+
+      // Wrap the module loader with the builtin filter so that
+      // non-whitelisted node:* modules are rejected at resolve time.
+      let filtered_loader: Rc<dyn ModuleLoader> = Rc::new(
+        FilteredModuleLoader::new(module_loader.clone(), args.builtins),
+      );
+
+      let node_require_loader = {
+        let CreateModuleLoaderResult {
+          module_loader: _,
+          node_require_loader,
+        } = shared.module_loader_factory.create_for_worker(
+          args.parent_permissions.clone(),
+          args.permissions.clone(),
+        );
+        node_require_loader
+      };
+
+      let extensions = deno_runtime::worker::common_extensions_for_isolate();
+
+      let mut js_runtime = JsRuntime::new(deno_core::RuntimeOptions {
+        module_loader: Some(filtered_loader),
+        startup_snapshot: shared.options.startup_snapshot,
+        create_params: Some(create_params),
+        skip_op_registration: true,
+        extensions,
+        inspector: false,
+        is_main: false,
+        ..Default::default()
+      });
+
+      // Provide all required extension state into OpState.
+      // This mirrors what lazy_init_extensions does but without
+      // re-registering ops (they come from the snapshot).
+      {
+        use deno_bundle_runtime;
+        use deno_runtime::deno_cache;
+        use deno_runtime::deno_crypto;
+        use deno_runtime::deno_fetch;
+        use deno_runtime::deno_ffi;
+        use deno_runtime::deno_fs;
+        use deno_runtime::deno_http;
+        use deno_runtime::deno_io;
+        use deno_runtime::deno_kv;
+        use deno_runtime::deno_napi;
+        use deno_runtime::deno_net;
+        use deno_runtime::deno_node;
+        use deno_runtime::deno_os;
+        use deno_runtime::deno_process;
+        use deno_runtime::deno_tls::TlsKeys;
+        use deno_runtime::deno_web;
+        use deno_runtime::deno_websocket;
+        use deno_runtime::deno_webstorage;
+
+        let user_agent =
+          crate::version::DENO_VERSION_INFO.user_agent.to_string();
+
+        js_runtime
+          .lazy_init_extensions(vec![
+            deno_web::deno_web::args(
+              shared.blob_store.clone(),
+              None,
+              shared.broadcast_channel.clone(),
+            ),
+            deno_fetch::deno_fetch::args(deno_fetch::Options {
+              user_agent: user_agent.clone(),
+              root_cert_store_provider: Some(
+                shared.root_cert_store_provider.clone(),
+              ),
+              ..Default::default()
+            }),
+            deno_cache::deno_cache::args(None),
+            deno_websocket::deno_websocket::args(),
+            deno_webstorage::deno_webstorage::args(None),
+            deno_crypto::deno_crypto::args(shared.options.seed),
+            deno_ffi::deno_ffi::args(
+              shared.deno_rt_native_addon_loader.clone(),
+            ),
+            deno_net::deno_net::args(
+              Some(shared.root_cert_store_provider.clone()),
+              None,
+            ),
+            deno_kv::deno_kv::args(
+              deno_kv::dynamic::MultiBackendDbHandler::remote_or_sqlite(
+                None,
+                shared.options.seed,
+                deno_kv::remote::HttpOptions {
+                  user_agent: user_agent.clone(),
+                  root_cert_store_provider: Some(
+                    shared.root_cert_store_provider.clone(),
+                  ),
+                  unsafely_ignore_certificate_errors: None,
+                  client_cert_chain_and_key: TlsKeys::Null,
+                  proxy: None,
+                },
+              ),
+              deno_kv::KvConfig::builder().build(),
+            ),
+            deno_napi::deno_napi::args(
+              shared.deno_rt_native_addon_loader.clone(),
+            ),
+            deno_http::deno_http::args(Default::default()),
+            deno_io::deno_io::args(Some(deno_io::Stdio::default())),
+            deno_fs::deno_fs::args(shared.fs.clone()),
+            deno_os::deno_os::args(None),
+            deno_process::deno_process::args(Some(
+              shared.npm_process_state_provider.clone(),
+            )),
+            deno_node::deno_node::args::<
+              DenoInNpmPackageChecker,
+              NpmResolver<TSys>,
+              TSys,
+            >(
+              Some(shared.create_node_init_services(node_require_loader)),
+              shared.fs.clone(),
+            ),
+            deno_runtime::ops::runtime::deno_runtime::args(
+              "deno:isolate".parse().unwrap(),
+            ),
+            deno_runtime::ops::worker_host::deno_worker_host::args(
+              shared.create_web_worker_callback(deno_io::Stdio::default()),
+              None,
+            ),
+            deno_runtime::ops::isolate_host::deno_isolate_host::args(
+              shared.create_isolate_runtime_callback(),
+            ),
+            deno_bundle_runtime::deno_bundle_runtime::args(None),
+          ])
+          .unwrap();
+      }
+
+      {
+        let op_state = js_runtime.op_state();
+        let mut state = op_state.borrow_mut();
+        state.put::<PermissionsContainer>(args.permissions);
+        state.put::<Arc<FeatureChecker>>(shared.feature_checker.clone());
+        state.put::<deno_runtime::ops::TestingFeaturesEnabled>(
+          deno_runtime::ops::TestingFeaturesEnabled(false),
+        );
+
+        // Bootstrap options needed by the JS runtime
+        state.put(deno_runtime::BootstrapOptions {
+          deno_version: crate::version::DENO_VERSION_INFO.deno.to_string(),
+          user_agent: crate::version::DENO_VERSION_INFO.user_agent.to_string(),
+          mode: deno_runtime::WorkerExecutionMode::Run,
+          ..Default::default()
+        });
+      }
+
+      // Run the bootstrap function to initialize the JS global environment
+      // (sets up globalThis, EventTarget, process, etc.)
+      let bootstrap_options = {
+        let op_state = js_runtime.op_state();
+        op_state.borrow().borrow::<deno_runtime::BootstrapOptions>().clone()
+      };
+      {
+        let context = js_runtime.main_context();
+        deno_core::scope!(scope, &mut js_runtime);
+        let context_local = v8::Local::new(scope, context);
+        let global_obj = context_local.global(scope);
+        let bootstrap_str =
+          v8::String::new_external_onebyte_static(scope, b"bootstrap")
+            .unwrap();
+        if let Some(bootstrap_ns) = global_obj.get(scope, bootstrap_str.into())
+        {
+          if let Ok(bootstrap_ns) =
+            v8::Local::<v8::Object>::try_from(bootstrap_ns)
+          {
+            let main_runtime_str =
+              v8::String::new_external_onebyte_static(scope, b"mainRuntime")
+                .unwrap();
+            if let Some(bootstrap_fn) =
+              bootstrap_ns.get(scope, main_runtime_str.into())
+            {
+              if let Ok(bootstrap_fn) =
+                v8::Local::<v8::Function>::try_from(bootstrap_fn)
+              {
+                let args_val = bootstrap_options.as_v8(scope);
+                let undefined = v8::undefined(scope);
+                bootstrap_fn.call(scope, undefined.into(), &[args_val]);
+              }
+            }
+          }
+        }
+      }
+
+      js_runtime
     })
   }
 }
@@ -700,6 +919,7 @@ impl<TSys: DenoLibSys> LibMainWorkerFactory<TSys> {
         format_js_error(e, maybe_initial_cwd.as_ref())
       })),
       create_web_worker_cb: shared.create_web_worker_callback(stdio.clone()),
+      create_isolate_runtime_cb: shared.create_isolate_runtime_callback(),
       should_break_on_first_statement: shared.options.inspect_brk,
       should_wait_for_inspector_session: shared.options.inspect_wait,
       trace_ops: shared.options.trace_ops.clone(),
