@@ -71,6 +71,18 @@ impl Foo {
   #[static_method]
   fn do_thing() {}
 
+  #[fast]
+  #[getter]
+  #[static_method]
+  fn static_value() -> u32 {
+    42
+  }
+
+  #[fast]
+  #[setter]
+  #[static_method]
+  fn static_value(_value: u32) {}
+
   #[nofast]
   fn do_thing(&self) {}
 

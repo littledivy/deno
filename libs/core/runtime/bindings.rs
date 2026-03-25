@@ -424,7 +424,12 @@ pub(crate) fn initialize_deno_core_ops_bindings<'s, 'i>(
     index += decl.methods.len();
 
     let static_method_ctxs = &op_ctxs[index..index + decl.static_methods.len()];
+    let static_accessor_store = create_accessor_store(static_method_ctxs);
     for method in static_method_ctxs.iter() {
+      if method.decl.is_accessor() {
+        // Static accessors are handled after the constructor function is created.
+        continue;
+      }
       let op_fn =
         op_ctx_template(scope, method, v8::ConstructorBehavior::Throw);
       let method_key = name_key(scope, &method.decl);
@@ -455,6 +460,60 @@ pub(crate) fn initialize_deno_core_ops_bindings<'s, 'i>(
 
     let op_fn = tmpl.get_function(scope).unwrap();
     op_fn.set_name(key);
+
+    // Register static accessor properties on the constructor function.
+    for (name, (named_getter, named_setter)) in &static_accessor_store {
+      let getter_value: v8::Local<v8::Value> =
+        if let Some(getter) = named_getter {
+          let getter_ctx_ptr = *getter as *const OpCtx as *const c_void;
+          let getter_external =
+            v8::External::new(scope, getter_ctx_ptr as *mut c_void);
+          let getter_raw = if getter.metrics_enabled() {
+            getter.decl.slow_fn_with_metrics
+          } else {
+            getter.decl.slow_fn
+          };
+          let getter_tmpl = v8::FunctionTemplate::builder_raw(getter_raw)
+            .data(getter_external.into())
+            .build(scope);
+          let getter_fn = getter_tmpl.get_function(scope).unwrap();
+          let fn_name = format!("get {name}");
+          let fn_name = v8::String::new(scope, fn_name.as_str()).unwrap();
+          getter_fn.set_name(fn_name);
+          getter_fn.into()
+        } else {
+          v8::undefined(scope).into()
+        };
+
+      let setter_value: v8::Local<v8::Value> =
+        if let Some(setter) = named_setter {
+          let setter_ctx_ptr = *setter as *const OpCtx as *const c_void;
+          let setter_external =
+            v8::External::new(scope, setter_ctx_ptr as *mut c_void);
+          let setter_raw = if setter.metrics_enabled() {
+            setter.decl.slow_fn_with_metrics
+          } else {
+            setter.decl.slow_fn
+          };
+          let setter_tmpl = v8::FunctionTemplate::builder_raw(setter_raw)
+            .data(setter_external.into())
+            .length(1)
+            .build(scope);
+          let setter_fn = setter_tmpl.get_function(scope).unwrap();
+          let fn_name = format!("set {name}");
+          let fn_name = v8::String::new(scope, fn_name.as_str()).unwrap();
+          setter_fn.set_name(fn_name);
+          setter_fn.into()
+        } else {
+          v8::undefined(scope).into()
+        };
+
+      let accessor_key = v8::String::new(scope, name).unwrap();
+      let desc =
+        v8::PropertyDescriptor::new_from_get_set(getter_value, setter_value);
+      op_fn.define_property(scope, accessor_key.into(), &desc);
+    }
+
     deno_core_ops_obj.set(scope, key.into(), op_fn.into());
 
     let id = (decl.type_name)().to_string();

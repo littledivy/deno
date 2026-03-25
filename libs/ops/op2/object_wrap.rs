@@ -133,7 +133,11 @@ pub(crate) fn generate_impl_ops(
 
         constructor = Some(ident);
       } else if config.static_member {
-        static_methods.push(format_ident!("__static_{}", ident));
+        if config.setter {
+          static_methods.push(format_ident!("__static___set_{}", ident));
+        } else {
+          static_methods.push(format_ident!("__static_{}", ident));
+        }
       } else {
         if config.setter {
           methods.push(format_ident!("__set_{}", ident));

@@ -226,7 +226,9 @@ pub(crate) fn generate_op2(
     }
   }
 
-  if config.setter {
+  if config.static_member && config.setter {
+    func.sig.ident = format_ident!("__static___set_{}", func.sig.ident);
+  } else if config.setter {
     // Prepend "__set_" to the setter function name.
     func.sig.ident = format_ident!("__set_{}", func.sig.ident);
   } else if config.static_member {

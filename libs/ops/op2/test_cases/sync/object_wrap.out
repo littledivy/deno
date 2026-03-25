@@ -10,7 +10,11 @@ impl Foo {
             Foo::doThing(),
             Foo::validate(),
         ],
-        static_methods: &[Foo::__static_doThing()],
+        static_methods: &[
+            Foo::__static_doThing(),
+            Foo::__static_staticValue(),
+            Foo::__static___set_staticValue(),
+        ],
         constructor: Some(Foo::constructor()),
         name: ::deno_core::__op_name_fast!(Foo),
         type_name: || std::any::type_name::<Foo>(),
@@ -406,10 +410,8 @@ impl Foo {
                 if args.length() < (1u8 as i32) + 0i32 {
                     let msg = format!(
                         "{}: {} {} required, but only {} present",
-                        "Failed to execute 'call' on 'Foo'",
-                        1u8,
-                        "argument",
-                        args.length() - 0i32,
+                        "Failed to execute 'call' on 'Foo'", 1u8, "argument", args
+                        .length() - 0i32
                     );
                     let msg = deno_core::v8::String::new(&mut scope, &msg).unwrap();
                     let exception = deno_core::v8::Exception::type_error(
@@ -976,6 +978,190 @@ impl Foo {
             fn call() {}
         }
         <__static_doThing as ::deno_core::_ops::Op>::DECL
+    }
+    #[allow(non_camel_case_types)]
+    const fn __static_staticValue() -> ::deno_core::_ops::OpDecl {
+        #[allow(non_camel_case_types)]
+        struct __static_staticValue {
+            _unconstructable: ::std::marker::PhantomData<()>,
+        }
+        impl ::deno_core::_ops::Op for __static_staticValue {
+            const NAME: &'static str = stringify!(staticValue);
+            const DECL: ::deno_core::_ops::OpDecl = ::deno_core::_ops::OpDecl::new_internal_op2(
+                ::deno_core::__op_name_fast!(staticValue),
+                false,
+                false,
+                false,
+                0usize as u8,
+                false,
+                Self::v8_fn_ptr as _,
+                Self::v8_fn_ptr_metrics as _,
+                ::deno_core::AccessorType::Getter,
+                None,
+                None,
+                ::deno_core::OpMetadata {
+                    ..::deno_core::OpMetadata::default()
+                },
+            );
+        }
+        impl __static_staticValue {
+            pub const fn name() -> &'static str {
+                <Self as deno_core::_ops::Op>::NAME
+            }
+            fn slow_function_impl<'s>(
+                info: &'s deno_core::v8::FunctionCallbackInfo,
+            ) -> usize {
+                #[cfg(debug_assertions)]
+                let _reentrancy_check_guard = deno_core::_ops::reentrancy_check(
+                    &<Self as deno_core::_ops::Op>::DECL,
+                );
+                let mut rv = deno_core::v8::ReturnValue::from_function_callback_info(
+                    info,
+                );
+                let result = { Self::call() };
+                deno_core::_ops::RustToV8RetVal::to_v8_rv(result, &mut rv);
+                return 0;
+            }
+            extern "C" fn v8_fn_ptr<'s>(
+                info: *const deno_core::v8::FunctionCallbackInfo,
+            ) {
+                let info: &'s _ = unsafe { &*info };
+                Self::slow_function_impl(info);
+            }
+            extern "C" fn v8_fn_ptr_metrics<'s>(
+                info: *const deno_core::v8::FunctionCallbackInfo,
+            ) {
+                let info: &'s _ = unsafe { &*info };
+                let args = deno_core::v8::FunctionCallbackArguments::from_function_callback_info(
+                    info,
+                );
+                let opctx: &'s _ = unsafe {
+                    &*(deno_core::v8::Local::<
+                        deno_core::v8::External,
+                    >::cast_unchecked(args.data())
+                        .value() as *const deno_core::_ops::OpCtx)
+                };
+                deno_core::_ops::dispatch_metrics_slow(
+                    opctx,
+                    deno_core::_ops::OpMetricsEvent::Dispatched,
+                );
+                let res = Self::slow_function_impl(info);
+                if res == 0 {
+                    deno_core::_ops::dispatch_metrics_slow(
+                        opctx,
+                        deno_core::_ops::OpMetricsEvent::Completed,
+                    );
+                } else {
+                    deno_core::_ops::dispatch_metrics_slow(
+                        opctx,
+                        deno_core::_ops::OpMetricsEvent::Error,
+                    );
+                }
+            }
+        }
+        impl __static_staticValue {
+            #[allow(clippy::too_many_arguments)]
+            fn call() -> u32 {
+                42
+            }
+        }
+        <__static_staticValue as ::deno_core::_ops::Op>::DECL
+    }
+    #[allow(non_camel_case_types)]
+    const fn __static___set_staticValue() -> ::deno_core::_ops::OpDecl {
+        #[allow(non_camel_case_types)]
+        struct __static___set_staticValue {
+            _unconstructable: ::std::marker::PhantomData<()>,
+        }
+        impl ::deno_core::_ops::Op for __static___set_staticValue {
+            const NAME: &'static str = stringify!(staticValue);
+            const DECL: ::deno_core::_ops::OpDecl = ::deno_core::_ops::OpDecl::new_internal_op2(
+                ::deno_core::__op_name_fast!(staticValue),
+                false,
+                false,
+                false,
+                1usize as u8,
+                false,
+                Self::v8_fn_ptr as _,
+                Self::v8_fn_ptr_metrics as _,
+                ::deno_core::AccessorType::Setter,
+                None,
+                None,
+                ::deno_core::OpMetadata {
+                    ..::deno_core::OpMetadata::default()
+                },
+            );
+        }
+        impl __static___set_staticValue {
+            pub const fn name() -> &'static str {
+                <Self as deno_core::_ops::Op>::NAME
+            }
+            fn slow_function_impl<'s>(
+                info: &'s deno_core::v8::FunctionCallbackInfo,
+            ) -> usize {
+                #[cfg(debug_assertions)]
+                let _reentrancy_check_guard = deno_core::_ops::reentrancy_check(
+                    &<Self as deno_core::_ops::Op>::DECL,
+                );
+                let args = deno_core::v8::FunctionCallbackArguments::from_function_callback_info(
+                    info,
+                );
+                let result = {
+                    let arg0 = args.get(0usize as i32);
+                    let Some(arg0) = deno_core::_ops::to_u32_option(&arg0) else {
+                        deno_core::_ops::throw_error_one_byte_info(
+                            &info,
+                            "expected u32",
+                        );
+                        return 1;
+                    };
+                    let arg0 = arg0 as _;
+                    Self::call(arg0)
+                };
+                return 0;
+            }
+            extern "C" fn v8_fn_ptr<'s>(
+                info: *const deno_core::v8::FunctionCallbackInfo,
+            ) {
+                let info: &'s _ = unsafe { &*info };
+                Self::slow_function_impl(info);
+            }
+            extern "C" fn v8_fn_ptr_metrics<'s>(
+                info: *const deno_core::v8::FunctionCallbackInfo,
+            ) {
+                let info: &'s _ = unsafe { &*info };
+                let args = deno_core::v8::FunctionCallbackArguments::from_function_callback_info(
+                    info,
+                );
+                let opctx: &'s _ = unsafe {
+                    &*(deno_core::v8::Local::<
+                        deno_core::v8::External,
+                    >::cast_unchecked(args.data())
+                        .value() as *const deno_core::_ops::OpCtx)
+                };
+                deno_core::_ops::dispatch_metrics_slow(
+                    opctx,
+                    deno_core::_ops::OpMetricsEvent::Dispatched,
+                );
+                let res = Self::slow_function_impl(info);
+                if res == 0 {
+                    deno_core::_ops::dispatch_metrics_slow(
+                        opctx,
+                        deno_core::_ops::OpMetricsEvent::Completed,
+                    );
+                } else {
+                    deno_core::_ops::dispatch_metrics_slow(
+                        opctx,
+                        deno_core::_ops::OpMetricsEvent::Error,
+                    );
+                }
+            }
+        }
+        impl __static___set_staticValue {
+            #[allow(clippy::too_many_arguments)]
+            fn call(_value: u32) {}
+        }
+        <__static___set_staticValue as ::deno_core::_ops::Op>::DECL
     }
     #[allow(non_camel_case_types)]
     const fn doThing() -> ::deno_core::_ops::OpDecl {
