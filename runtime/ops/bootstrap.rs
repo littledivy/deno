@@ -59,8 +59,15 @@ impl Default for SnapshotOptions {
     };
 
     Self {
-      ts_version: "n/a".to_owned(),
-      v8_version: deno_core::v8::VERSION_STRING,
+      // v82jsc: no-snapshot (hmr) builds construct SnapshotOptions at runtime
+      // via this Default rather than baking it at snapshot-build time, so report
+      // the bundled TypeScript version (cli/snapshot/shared.rs) instead of
+      // "n/a", matching stock deno's `Deno.version.typescript`.
+      ts_version: "6.0.3".to_owned(),
+      // Runtime engine version (v82jsc shim: real quickjs-ng / JavaScriptCore
+      // version) rather than the baked-in V8 number, so `Deno.version.v8`
+      // reflects the engine actually executing.
+      v8_version: deno_core::v8::V8::get_version(),
       target,
     }
   }

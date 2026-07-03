@@ -5887,6 +5887,15 @@ fn run_tsc_thread(
     extensions,
     create_params: create_isolate_create_params(&crate::sys::CliSys::default()),
     startup_snapshot: deno_snapshots::CLI_SNAPSHOT,
+    // v82jsc: with no startup snapshot (hmr builds), the snapshot extensions
+    // load fresh at boot, so any TypeScript ext module (e.g.
+    // ext:deno_bundle_runtime/bundle.ts) must be transpiled before the engine
+    // compiles it — mirror the worker's transpiler. On a real-v8 snapshot
+    // build CLI_SNAPSHOT is Some and these are pre-transpiled, so this is inert.
+    #[cfg(feature = "transpile")]
+    extension_transpiler: Some(std::rc::Rc::new(|specifier, source| {
+      deno_runtime::transpile::maybe_transpile_source(specifier, source)
+    })),
     inspector: has_inspector_server,
     // See cli/tsc/js.rs: the LSP TSC isolate shares CLI_SNAPSHOT and needs
     // the residual lazy-ESM/JS sources for node:* lookups (e.g. `process`).

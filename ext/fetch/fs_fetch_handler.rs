@@ -20,6 +20,24 @@ use crate::CancelableResponseFuture;
 use crate::FetchHandler;
 use crate::ResourceToBodyAdapter;
 
+fn content_type_for_ext(ext: &str) -> Option<&'static str> {
+  Some(match ext {
+    "wasm" => "application/wasm",
+    "js" | "mjs" | "cjs" => "text/javascript",
+    "json" => "application/json",
+    "html" | "htm" => "text/html",
+    "css" => "text/css",
+    "txt" => "text/plain",
+    "svg" => "image/svg+xml",
+    "png" => "image/png",
+    "jpg" | "jpeg" => "image/jpeg",
+    "gif" => "image/gif",
+    "wav" => "audio/wav",
+    "woff2" => "font/woff2",
+    _ => return None,
+  })
+}
+
 /// An implementation which tries to read file URLs via `deno_fs::FileSystem`.
 #[derive(Clone)]
 pub struct FsFetchHandler;
@@ -42,6 +60,13 @@ impl FetchHandler for FsFetchHandler {
         );
       }
     };
+    // Set a Content-Type by file extension so consumers that gate on it (e.g.
+    // `WebAssembly.instantiateStreaming`, which requires `application/wasm`) work
+    // on `file://` responses, matching browser/deno behaviour.
+    let content_type = path
+      .extension()
+      .and_then(|e| e.to_str())
+      .and_then(content_type_for_ext);
     let fs = state.borrow::<FileSystemRc>().clone();
     let path = state
       .borrow::<PermissionsContainer>()
@@ -54,7 +79,13 @@ impl FetchHandler for FsFetchHandler {
         .map_err(|_| super::FetchError::NetworkError)?;
       let resource = Rc::new(FileResource::new(file, "".to_owned()));
       let body = BoxBody::new(ResourceToBodyAdapter::new(resource));
-      let response = http::Response::new(body);
+      let mut builder = http::Response::builder();
+      if let Some(ct) = content_type {
+        builder = builder.header(http::header::CONTENT_TYPE, ct);
+      }
+      let response = builder
+        .body(body)
+        .map_err(|_| super::FetchError::NetworkError)?;
       Ok(response)
     }
     .or_cancel(&cancel_handle)

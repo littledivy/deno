@@ -369,6 +369,14 @@ pub fn exec_request(
     extensions,
     create_params: create_isolate_create_params(&crate::sys::CliSys::default()),
     startup_snapshot: deno_snapshots::CLI_SNAPSHOT,
+    // v82jsc: no startup snapshot (hmr) => snapshot extensions load fresh at
+    // boot, so TypeScript ext modules (e.g. ext:deno_bundle_runtime/bundle.ts)
+    // must be transpiled before the engine compiles them. Inert on a real-v8
+    // snapshot build (CLI_SNAPSHOT is Some => these are pre-transpiled).
+    #[cfg(feature = "transpile")]
+    extension_transpiler: Some(Rc::new(|specifier, source| {
+      deno_runtime::transpile::maybe_transpile_source(specifier, source)
+    })),
     extension_code_cache,
     // The TSC isolate shares CLI_SNAPSHOT, which under node-defer leaves
     // node:process (and the rest of node's `lazy_loaded_esm` set) outside
