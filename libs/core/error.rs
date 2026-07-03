@@ -2086,6 +2086,15 @@ pub fn prepare_stack_trace_callback<'s, 'i>(
   error: v8::Local<'s, v8::Value>,
   callsites: v8::Local<'s, v8::Array>,
 ) -> v8::Local<'s, v8::Value> {
+  // v82jsc: QuickJS computes `error.stack` EAGERLY at throw time (V8 defers
+  // to the first `.stack` access), so an exception thrown while the runtime
+  // is still initializing reaches this callback before `set_data` stored the
+  // JsRuntimeState pointer — `state_from` would then Rc::from_raw(null).
+  // Return undefined in that window; the backend falls back to its own
+  // V8-shaped stack string.
+  if scope.get_data(0).is_null() {
+    return v8::undefined(scope).into();
+  }
   prepare_stack_trace_inner::<true>(scope, error, callsites)
 }
 
